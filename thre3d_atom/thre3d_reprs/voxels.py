@@ -292,6 +292,7 @@ class VoxelGrid(Module):
         preactivated_densities = self._density_preactivation(
             self._densities * self._expected_density_scale
         )  # note the use of the expected density scale
+        # ADDITION ES: Changed interpolation mode to nearest here
         interpolated_densities = (
             grid_sample(
                 # note the weird z, y, x convention of PyTorch's grid_sample.
@@ -299,6 +300,7 @@ class VoxelGrid(Module):
                 # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
                 preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
                 normalized_points[None, None, None, ...],
+                mode="nearest",
                 align_corners=False,
             )
             .permute(0, 2, 3, 4, 1)
@@ -309,11 +311,13 @@ class VoxelGrid(Module):
         interpolated_densities = self._density_postactivation(interpolated_densities)
 
         # interpolate and compute features
+        # ADDITION ES: Changed interpolation mode to nearest here
         preactivated_features = self._feature_preactivation(self._features)
         interpolated_features = (
             grid_sample(
                 preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
                 normalized_points[None, None, None, ...],
+                mode="nearest",
                 align_corners=False,
             )
             .permute(0, 2, 3, 4, 1)

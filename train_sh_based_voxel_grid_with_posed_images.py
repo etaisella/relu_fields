@@ -81,13 +81,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Training related arguments:
 @click.option("--ray_batch_size", type=click.INT, required=False, default=16384,
               help="number of randomly sampled rays used per training iteration", show_default=True)
-@click.option("--train_num_samples_per_ray", type=click.INT, required=False, default=256,
+@click.option("--train_num_samples_per_ray", type=click.INT, required=False, default=512,
               help="number of samples taken per ray during training", show_default=True)
 @click.option("--num_stages", type=click.INT, required=False, default=4,
               help="number of progressive growing stages used in training", show_default=True)
-@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=500,
+@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=800,
               help="number of training iterations performed per stage", show_default=True)
-@click.option("--scale_factor", type=click.FLOAT, required=False, default=2.0,
+@click.option("--scale_factor", type=click.FLOAT, required=False, default=1.5,
               help="factor by which the grid is up-scaled after each stage", show_default=True)
 @click.option("--learning_rate", type=click.FLOAT, required=False, default=0.03,
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
