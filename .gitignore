@@ -136,3 +136,7 @@ dmypy.json
 
 # ignore the logs directory as well:
 logs/
+
+# ETAI ADDITIONS:
+*.save
+*.zip
