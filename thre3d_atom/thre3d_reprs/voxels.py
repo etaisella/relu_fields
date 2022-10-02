@@ -105,6 +105,8 @@ class VoxelGrid(Module):
         self._voxel_size = voxel_size
         self._expected_density_scale = expected_density_scale
         self._tunable = tunable
+        # ES addition: adding interpolation mode as a public member
+        self.interpolation_mode = "bilinear"
 
         if tunable:
             self._densities = torch.nn.Parameter(self._densities)
@@ -300,7 +302,7 @@ class VoxelGrid(Module):
                 # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
                 preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
                 normalized_points[None, None, None, ...],
-                mode="nearest",
+                mode=self.interpolation_mode,
                 align_corners=False,
             )
             .permute(0, 2, 3, 4, 1)
@@ -317,7 +319,7 @@ class VoxelGrid(Module):
             grid_sample(
                 preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
                 normalized_points[None, None, None, ...],
-                mode="nearest",
+                mode=self.interpolation_mode,
                 align_corners=False,
             )
             .permute(0, 2, 3, 4, 1)

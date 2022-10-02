@@ -45,11 +45,17 @@ def render_camera_path_for_volumetric_model(
             **overridden_config_dict,
         )
         colour_frame = rendered_output.colour.numpy()
+
         depth_frame = rendered_output.depth.numpy()
         acc_frame = rendered_output.extra[EXTRA_ACCUMULATED_WEIGHTS].numpy()
 
         # apply post-processing to the depth frame
         colour_frame = to8b(colour_frame)
+
+        if frame_num == 60:
+            print(f"color frame shape: {colour_frame.shape}")
+            frame_60 = colour_frame
+
         depth_frame = postprocess_depth_map(
             depth_frame, vol_mod.render_config.camera_bounds
         )
@@ -60,4 +66,4 @@ def render_camera_path_for_volumetric_model(
         frame = np.concatenate([colour_frame, depth_frame, acc_frame], axis=1)
         rendered_frames.append(frame)
 
-    return np.stack(rendered_frames)
+    return np.stack(rendered_frames), frame_60

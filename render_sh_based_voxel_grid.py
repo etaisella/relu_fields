@@ -1,4 +1,5 @@
 from pathlib import Path
+from PIL import Image as im
 import click
 import imageio
 import torch
@@ -101,13 +102,18 @@ def main(**kwargs) -> None:
             f"Only available options are: ['thre360' and 'spiral']"
         )
 
-    animation_frames = render_camera_path_for_volumetric_model(
+    animation_frames, frame_60 = render_camera_path_for_volumetric_model(
         vol_mod=vol_mod,
         camera_path=animation_poses,
         camera_intrinsics=camera_intrinsics,
         overridden_num_samples_per_ray=config.overridden_num_samples_per_ray,
         render_scale_factor=config.render_scale_factor,
     )
+
+    # ES Addition: dumping frame 60
+    #data = im.fromarray(frame_60)
+    #data.save(output_path / "frame_60.png")
+
     imageio.mimwrite(
         output_path / "rendered_video.mp4",
         animation_frames,

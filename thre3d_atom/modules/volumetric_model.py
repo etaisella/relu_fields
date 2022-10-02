@@ -182,6 +182,11 @@ def create_volumetric_model_from_saved_model(
     # load the saved model's data using
     model_data = torch.load(model_path)
     thre3d_repr = thre3d_repr_creator(model_data)
+    # ES Addition - Print the interpolation mode the model has been trained with:
+    print(f"Current Interpolation mode: {thre3d_repr.interpolation_mode}")
+    # ES Addition - Change the interpolation mode:
+    thre3d_repr.interpolation_mode = 'nearest'
+    print(f"Interpolation mode changed to: {thre3d_repr.interpolation_mode}")
     render_config = model_data[RENDER_CONFIG_TYPE](**model_data[RENDER_CONFIG])
 
     # return a newly constructed VolumetricModel using the info above
