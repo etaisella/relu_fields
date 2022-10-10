@@ -55,6 +55,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @click.option("--fps", type=click.IntRange(min=1), default=60,
               required=False, help="frames per second of the video")
 
+# ES ADDITIONS:
+@click.option("--clusters", type=click.IntRange(min=0), default=0,
+              required=False, help="frames per second of the video")
+
 # fmt: on
 # -------------------------------------------------------------------------------------
 def main(**kwargs) -> None:
@@ -73,6 +77,7 @@ def main(**kwargs) -> None:
         model_path=model_path,
         thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
         device=device,
+        num_clusters=config.clusters,
     )
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]
@@ -102,7 +107,7 @@ def main(**kwargs) -> None:
             f"Only available options are: ['thre360' and 'spiral']"
         )
 
-    animation_frames, frame_60 = render_camera_path_for_volumetric_model(
+    animation_frames = render_camera_path_for_volumetric_model(
         vol_mod=vol_mod,
         camera_path=animation_poses,
         camera_intrinsics=camera_intrinsics,

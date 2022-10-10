@@ -108,7 +108,9 @@ def _process_rendered_output_for_feedback_log(
         # noinspection PyTypeChecker
         feedback_image = np.array(pil_feedback_image)
 
-    return feedback_image
+    # ES Addition: Output only the color map
+    return colour_map
+    #return feedback_image
 
 
 def visualize_sh_vox_grid_vol_mod_rendered_feedback(

@@ -87,7 +87,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="number of progressive growing stages used in training", show_default=True)
 @click.option("--num_iterations_per_stage", type=click.INT, required=False, default=800,
               help="number of training iterations performed per stage", show_default=True)
-@click.option("--scale_factor", type=click.FLOAT, required=False, default=1.5,
+@click.option("--scale_factor", type=click.FLOAT, required=False, default=2.0,
               help="factor by which the grid is up-scaled after each stage", show_default=True)
 @click.option("--learning_rate", type=click.FLOAT, required=False, default=0.03,
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
@@ -123,6 +123,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @click.option("--fast_debug_mode", type=click.BOOL, required=False, default=False,
               help="whether to use the fast debug mode while training "
                    "(skips testing and some lengthy visualizations)", show_default=True)
+
+# Etai Additions:
+@click.option("--rtmv", type=click.BOOL, required=False, default=False,
+              help="a flag ES added to change the way we load DATA to use the RTMV dataset", show_default=True)
+
 # fmt: on
 # -------------------------------------------------------------------------------------
 def main(**kwargs) -> None:
@@ -146,7 +151,7 @@ def main(**kwargs) -> None:
             downsample_factor=config.data_downsample_factor,
             rgba_white_bkgd=config.white_bkgd,
         )
-        for mode in ("train", "test")
+    for mode in ("train", "test")
     )
 
     # Choose the proper activations dict based on the requested mode:

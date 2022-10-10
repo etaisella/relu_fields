@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+from kmeans_pytorch import kmeans
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, Tuple
 
@@ -22,6 +23,7 @@ from thre3d_atom.thre3d_reprs.constants import (
     THRE3D_REPR,
     RENDER_CONFIG_TYPE,
 )
+from thre3d_atom.utils.constants import NUM_COLOUR_CHANNELS
 from thre3d_atom.thre3d_reprs.renderers import RenderProcedure, RenderConfig
 from thre3d_atom.utils.constants import EXTRA_INFO
 from thre3d_atom.utils.imaging_utils import CameraIntrinsics, CameraPose
@@ -188,6 +190,25 @@ def create_volumetric_model_from_saved_model(
     thre3d_repr.interpolation_mode = 'nearest'
     print(f"Interpolation mode changed to: {thre3d_repr.interpolation_mode}")
     render_config = model_data[RENDER_CONFIG_TYPE](**model_data[RENDER_CONFIG])
+
+    # ES Addition - Quantize zero order coeffs:
+    num_clusters = 8 # TODO: make this come from an external argument
+    coeff_grid = thre3d_repr.features.data
+    x_grid, y_grid, z_grid, _ = coeff_grid.shape
+    coeff_grid = coeff_grid.reshape(x_grid, y_grid, z_grid, NUM_COLOUR_CHANNELS, -1)
+    coeff_grid_zero = coeff_grid[..., :1]
+    grid_flat = coeff_grid_zero.view(-1, NUM_COLOUR_CHANNELS) 
+
+    # run K-means:
+    cluster_ids_x, cluster_centers = kmeans(
+    X=grid_flat, num_clusters=num_clusters, distance='euclidean', device=device
+    )
+
+    # quantize coefficients:
+    q_grid_flat = cluster_centers[cluster_ids_x[:],:]
+    q_grid = q_grid_flat.reshape(x_grid, y_grid, z_grid, NUM_COLOUR_CHANNELS)
+    coeff_grid[..., :1] = torch.unsqueeze(q_grid, -1)
+    thre3d_repr.features.data = coeff_grid.reshape(x_grid, y_grid, z_grid, -1)
 
     # return a newly constructed VolumetricModel using the info above
     # and the additional information saved at the time of training :)
