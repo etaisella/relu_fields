@@ -4,6 +4,8 @@ import click
 import imageio
 import torch
 
+from thre3d_atom.data.datasets import PosedImagesDataset
+
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation
 from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
 
@@ -24,7 +26,8 @@ from thre3d_atom.utils.imaging_utils import (
 from thre3d_atom.visualizations.animations import (
     render_camera_path_for_volumetric_model,
 )
-
+from thre3d_atom.utils.logging import log
+from thre3d_atom.utils.misc import log_config_to_disk
 from easydict import EasyDict
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,10 +40,25 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # noinspection PyUnresolvedReferences
 @click.command()
 # Required arguments:
-@click.option("-i", "--model_path", type=click.Path(file_okay=True, dir_okay=False),
+@click.option("-i", "--high_res_model_path", type=click.Path(file_okay=True, dir_okay=False),
               required=True, help="path to the trained High Resolution model")
-@click.option("-o", "--output_path", type=click.Path(file_okay=False, dir_okay=True),
+@click.option("-r", "--output_render_path", type=click.Path(file_okay=False, dir_okay=True),
               required=True, help="path for saving rendered output")
+@click.option("-o", "--out_model_path", type=click.Path(file_okay=True, dir_okay=False),
+              required=True, help="path to the output VA model")
+@click.option("-d", "--data_path", type=click.Path(file_okay=False, dir_okay=True),
+              required=True, help="path to the input dataset")
+
+# Non-required Training Configurations options:
+@click.option("--white_bkgd", type=click.BOOL, required=False, default=True,
+              help="whether to use white background for training with synthetic (background-less) scenes :)",
+              show_default=True)  # this option is also used in pre-processing the dataset
+@click.option("--data_downsample_factor", type=click.FloatRange(min=1.0), required=False,
+              default=2.0, help="downscale factor for the input images if needed."
+                                "Note the default, for training NeRF-based scenes", show_default=True)
+@click.option("--normalize_scene_scale", type=click.BOOL, required=False, default=False,
+              help="whether to normalize the scene's scale to unit radius", show_default=True)
+
 
 # Non-required Render configuration options:
 @click.option("--overridden_num_samples_per_ray", type=click.IntRange(min=1), default=512,
@@ -81,16 +99,20 @@ def main(**kwargs) -> None:
     # load the requested configuration for the training
     config = EasyDict(kwargs)
 
+# -------------------------------------------------------------------------------------
+#  Learning Voxel Art Grid                                                            |
+# -------------------------------------------------------------------------------------
+
     # parse os-checked path-strings into Pathlike Paths :)
-    model_path = Path(config.model_path)
-    output_path = Path(config.output_path)
+    highres_model_path = Path(config.high_res_model_path)
+    output_render_path = Path(config.output_render_path)
 
     # create the output path if it doesn't exist
-    output_path.mkdir(exist_ok=True, parents=True)
+    output_render_path.mkdir(exist_ok=True, parents=True)
 
     # load volumetric_model from the model_path
     vol_mod, extra_info = create_volumetric_model_from_saved_model(
-        model_path=model_path,
+        model_path=highres_model_path,
         thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
         device=device,
         num_clusters=config.clusters,
@@ -139,7 +161,33 @@ def main(**kwargs) -> None:
         tunable=True,
     )
 
-    #### START RENDERING ####
+    # 2. Set Dataset Parameters
+    # parse os-checked path-strings into Pathlike Paths :)
+    data_path = Path(config.data_path)
+    output_model_path = Path(config.out_model_path)
+
+    # save a copy of the configuration for reference
+    log.info("logging configuration file ...")
+    log_config_to_disk(config, output_model_path)
+
+    # create a datasets for training and testing:
+    train_dataset, test_dataset = (
+        PosedImagesDataset(
+            images_dir=data_path / mode,
+            camera_params_json=data_path / f"{mode}_camera_params.json",
+            normalize_scene_scale=config.normalize_scene_scale,
+            downsample_factor=config.data_downsample_factor,
+            rgba_white_bkgd=config.white_bkgd,
+        )
+    for mode in ("train", "test")
+    )
+
+    
+
+# -------------------------------------------------------------------------------------
+#  Rendering Output Video                                                             |
+# -------------------------------------------------------------------------------------
+
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]
 
@@ -181,7 +229,7 @@ def main(**kwargs) -> None:
     #data.save(output_path / "frame_60.png")
 
     imageio.mimwrite(
-        output_path / "rendered_video.mp4",
+        output_render_path / "rendered_video.mp4",
         animation_frames,
         fps=config.fps,
     )
