@@ -26,6 +26,7 @@ from thre3d_atom.thre3d_reprs.voxels import (
     VoxelGrid,
     scale_voxel_grid_with_required_output_size,
 )
+from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
 from thre3d_atom.utils.constants import (
     CAMERA_BOUNDS,
     CAMERA_INTRINSICS,
@@ -79,6 +80,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     num_workers: int = 4,
     verbose_rendering: bool = True,
     fast_debug_mode: bool = False,
+    voxelArt_mode: bool = False,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -110,12 +112,13 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         num_workers: num_workers used by pytorch dataloader
         verbose_rendering: bool to control whether to show verbose details while generating rendered feedback
         fast_debug_mode: bool to control fast_debug_mode, skips testing and some other things
+        voxelArt_mode: bool to control voxel Art mode, in which we don't use stages
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
     # assertions about the VolumetricModel being used with this TrainProcedure :)
-    assert isinstance(vol_mod.thre3d_repr, VoxelGrid), (
+    assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid), (
         f"sorry, cannot use a {type(vol_mod.thre3d_repr)} with this TrainProcedure :(; "
-        f"only a {type(VoxelGrid)} can be used"
+        f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} can be used"
     )
     assert (
         vol_mod.render_procedure == render_sh_voxel_grid
@@ -139,17 +142,20 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         stagewise_train_datasets.insert(0, PosedImagesDataset(**dataset_config_dict))
 
     # downscale the feature-grid to the smallest size:
-    with torch.no_grad():
-        # TODO: Possibly create a nice interface for reprs as a resolution of the below warning
-        # noinspection PyTypeChecker
-        vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
-            vol_mod.thre3d_repr,
-            output_size=stagewise_voxel_grid_sizes[0],
-            mode="trilinear",
-        )
-        # reinitialize the scaled features and densities to remove any bias
-        random_initializer(vol_mod.thre3d_repr.densities)
-        random_initializer(vol_mod.thre3d_repr.features)
+    if not voxelArt_mode: 
+        with torch.no_grad():
+            # TODO: Possibly create a nice interface for reprs as a resolution of the below warning
+            # noinspection PyTypeChecker
+            vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
+                vol_mod.thre3d_repr,
+                output_size=stagewise_voxel_grid_sizes[0],
+                mode="trilinear",
+            )
+            # reinitialize the scaled features and densities to remove any bias
+            random_initializer(vol_mod.thre3d_repr.densities)
+            random_initializer(vol_mod.thre3d_repr.features)
+    else:
+        random_initializer(vol_mod.thre3d_repr.downsample_weights)
 
     # setup render_feedback_pose
     real_feedback_image = None

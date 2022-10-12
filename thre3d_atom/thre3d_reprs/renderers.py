@@ -74,6 +74,7 @@ def render_sh_voxel_grid(
         )
     # prepare the processor_function
     point_processor_function = partial(
+        # ES Addition: TODO: Use different function here for voxel art grid
         process_points_with_sh_voxel_grid,
         voxel_grid=voxel_grid,
         render_diffuse=render_config.render_diffuse,

@@ -5,7 +5,7 @@ from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation, AxisAl
 import torch
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.functional import grid_sample, interpolate
+from torch.nn.functional import grid_sample, normalize, interpolate
 
 from thre3d_atom.thre3d_reprs.constants import (
     THRE3D_REPR,
@@ -163,47 +163,15 @@ class VoxelArtGrid(Module):
         self._total_block_size = self._block_x * self._block_y * self._block_z
 
         # prepare high res features and densities
-        #num_coeffs = high_res_features.shape[-1]
-        #self._high_res_densities = torch.zeros((self.width_x, self.depth_y, self.height_z, self._total_block_size, 1), \
-        #    device=self._device)
-        #self._high_res_features = torch.zeros((self.width_x, self.depth_y, self.height_z, self._total_block_size, num_coeffs), \
-        #    device=self._device)
-
         self._high_res_densities = split_to_subblocks(high_res_densities, (self._block_x, self._block_y, self._block_z))
         self._high_res_features = split_to_subblocks(high_res_features, (self._block_x, self._block_y, self._block_z))
 
-        test0 = high_res_densities.reshape(64, 64, 64, 2, 2, 2, 1)
-        test1  = torch.flatten(test0, start_dim=3, end_dim=-2)
         # setup the bounding box planes
         self._aabb = self._setup_bounding_box_planes()
 
     @property
-    def densities(self) -> Tensor:
-        return self._densities
-
-    @property
-    def features(self) -> Tensor:
-        return self._features
-
-    @features.setter
-    def features(self, features: Tensor) -> None:
-        assert (
-            features.shape == self._features.shape
-        ), f"new features don't match original feature tensor's dimensions"
-        if self._tunable and not isinstance(features, torch.nn.Parameter):
-            self._features = torch.nn.Parameter(features)
-        else:
-            self._features = features
-
-    @densities.setter
-    def densities(self, densities: Tensor) -> None:
-        assert (
-            densities.shape == self._densities.shape
-        ), f"new densities don't match original densities tensor's dimensions"
-        if self._tunable and not isinstance(densities, torch.nn.Parameter):
-            self._densities = torch.nn.Parameter(densities)
-        else:
-            self._densities = densities
+    def downsample_weights(self) -> Tensor:
+        return self._downsample_weights
 
     @property
     def aabb(self) -> AxisAlignedBoundingBox:
@@ -341,12 +309,34 @@ class VoxelArtGrid(Module):
         # obtain the range-normalized points for interpolation
         normalized_points = self._normalize_points(points)
 
+        # interpolate and compute weights
+        # no preactivation needed here, atleast not yet
+        preactivated_weights = torch.squeeze(self._downsample_weights)
+        interpolated_weights = (
+            grid_sample(
+                # note the weird z, y, x convention of PyTorch's grid_sample.
+                # reference ->
+                # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
+                preactivated_weights[None, ...].permute(0, 4, 3, 2, 1),
+                normalized_points[None, None, None, ...],
+                mode=self.interpolation_mode,
+                align_corners=False,
+            )
+            .permute(0, 2, 3, 4, 1)
+            .squeeze()
+        )[
+            ..., None
+        ]  # note this None is required because of the squeeze operation :sweat_smile:
+        interpolated_weights = self._density_postactivation(interpolated_weights).squeeze()
+        interpolated_weights = normalize(interpolated_weights, p=1, dim=-1)
+
         # interpolate and compute densities
         # Note the pre- and post-activations :)
         preactivated_densities = self._density_preactivation(
-            self._densities * self._expected_density_scale
+            self._high_res_densities * self._expected_density_scale
         )  # note the use of the expected density scale
-        # ADDITION ES: Changed interpolation mode to nearest here
+        # ES Addition: change to 4D format to support torch grid sample
+        preactivated_densities = torch.squeeze(preactivated_densities).float()
         interpolated_densities = (
             grid_sample(
                 # note the weird z, y, x convention of PyTorch's grid_sample.
@@ -362,11 +352,12 @@ class VoxelArtGrid(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_densities = self._density_postactivation(interpolated_densities)
+        interpolated_densities = self._density_postactivation(interpolated_densities).squeeze()
 
         # interpolate and compute features
-        # ADDITION ES: Changed interpolation mode to nearest here
-        preactivated_features = self._feature_preactivation(self._features)
+        # ES Addition: change to 4D format to support torch grid sample
+        preactivated_features = self._feature_preactivation(self._high_res_features).float()
+        preactivated_features = torch.reshape(preactivated_features, *preactivated_features.shape[0:-2], -1)
         interpolated_features = (
             grid_sample(
                 preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
