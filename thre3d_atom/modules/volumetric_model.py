@@ -183,7 +183,7 @@ def create_volumetric_model_from_saved_model(
     num_clusters: int = 0,
 ) -> Tuple[VolumetricModel, Dict[str, Any]]:
     # load the saved model's data using
-    model_data = torch.load(model_path)
+    model_data = torch.load(model_path, map_location=device)
     thre3d_repr = thre3d_repr_creator(model_data)
     # ES Addition - Print the interpolation mode the model has been trained with:
     print(f"Current Interpolation mode: {thre3d_repr.interpolation_mode}")

@@ -20,9 +20,9 @@ train_and_render() {
 	echo "Starting Rendering..."
 	python learn_voxelArt_grid.py \
 	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/saved_models/model_final.pth \
-	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/ \
-	--clusters=${9} \
-	--new_grid_dims=${10} ${10} ${10}
+	-r output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/ \
+	-d c:/Users/etais/TAU/code/relu_fields/data/${1}/ \
+	-o logs/rf/voxelArt_try/
 }
 
 # STARTING RUN:

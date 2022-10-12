@@ -327,8 +327,8 @@ class VoxelArtGrid(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_weights = self._density_postactivation(interpolated_weights).squeeze()
-        interpolated_weights = normalize(interpolated_weights, p=1, dim=-1)
+        interpolated_weights = self._density_postactivation(interpolated_weights)
+        interpolated_weights = normalize(interpolated_weights, p=1, dim=-2)
 
         # interpolate and compute densities
         # Note the pre- and post-activations :)
@@ -352,12 +352,15 @@ class VoxelArtGrid(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_densities = self._density_postactivation(interpolated_densities).squeeze()
+        interpolated_densities = self._density_postactivation(interpolated_densities)
+
+        # ES Addition: Multiply by weights to get the final densities:
+        weighted_densities = torch.sum(interpolated_densities * interpolated_weights, dim=-2)
 
         # interpolate and compute features
         # ES Addition: change to 4D format to support torch grid sample
         preactivated_features = self._feature_preactivation(self._high_res_features).float()
-        preactivated_features = torch.reshape(preactivated_features, *preactivated_features.shape[0:-2], -1)
+        preactivated_features = torch.reshape(preactivated_features, (*preactivated_features.shape[0:-2], -1))
         interpolated_features = (
             grid_sample(
                 preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
@@ -369,15 +372,19 @@ class VoxelArtGrid(Module):
             .squeeze()
         )
         interpolated_features = self._feature_postactivation(interpolated_features)
+        interpolated_features = torch.reshape(interpolated_features, (-1, *self._high_res_features.shape[-2:]))
+
+        # ES Addition: Multiply by weights to get the final densities:
+        weighted_features = torch.sum(interpolated_features * interpolated_weights, dim=-2)
 
         # apply the radiance transfer function if it is not None and if view-directions are available
         if self._radiance_transfer_function is not None and viewdirs is not None:
-            interpolated_features = self._radiance_transfer_function(
-                interpolated_features, viewdirs
+            weighted_features = self._radiance_transfer_function(
+                weighted_features, viewdirs
             )
 
         # return a unified tensor containing interpolated features and densities
-        return torch.cat([interpolated_features, interpolated_densities], dim=-1)
+        return torch.cat([weighted_features, weighted_densities], dim=-1)
 
 '''
 def scale_voxel_grid_with_required_output_size(
