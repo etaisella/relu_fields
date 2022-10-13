@@ -124,7 +124,7 @@ class VoxelArtGrid(Module):
         self._expected_density_scale = expected_density_scale
         self._tunable = tunable
         # ES addition: adding interpolation mode as a public member
-        self.interpolation_mode = "nearest"
+        self.interpolation_mode = "bilinear"
 
         if tunable:
             self._downsample_weights = torch.nn.Parameter(self._downsample_weights)
@@ -164,10 +164,14 @@ class VoxelArtGrid(Module):
 
         # prepare high res features and densities
         self._high_res_densities = split_to_subblocks(high_res_densities, (self._block_x, self._block_y, self._block_z))
+        self._high_res_densities.requires_grad = False
         self._high_res_features = split_to_subblocks(high_res_features, (self._block_x, self._block_y, self._block_z))
+        self._high_res_features.requires_grad = False
 
         # setup the bounding box planes
         self._aabb = self._setup_bounding_box_planes()
+
+        self._sigmoid = torch.nn.Sigmoid()
 
     @property
     def downsample_weights(self) -> Tensor:
@@ -328,53 +332,56 @@ class VoxelArtGrid(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
         interpolated_weights = self._density_postactivation(interpolated_weights)
-        interpolated_weights = normalize(interpolated_weights, p=1, dim=-2)
-
+        
         # interpolate and compute densities
         # Note the pre- and post-activations :)
         preactivated_densities = self._density_preactivation(
             self._high_res_densities * self._expected_density_scale
         )  # note the use of the expected density scale
         # ES Addition: change to 4D format to support torch grid sample
-        preactivated_densities = torch.squeeze(preactivated_densities).float()
-        interpolated_densities = (
-            grid_sample(
-                # note the weird z, y, x convention of PyTorch's grid_sample.
-                # reference ->
-                # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
-                preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
-                normalized_points[None, None, None, ...],
-                mode=self.interpolation_mode,
-                align_corners=False,
-            )
-            .permute(0, 2, 3, 4, 1)
-            .squeeze()
-        )[
-            ..., None
-        ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_densities = self._density_postactivation(interpolated_densities)
+        with torch.no_grad():
+            preactivated_densities = torch.squeeze(preactivated_densities).float()
+            interpolated_densities = (
+                grid_sample(
+                    # note the weird z, y, x convention of PyTorch's grid_sample.
+                    # reference ->
+                    # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
+                    preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
+                    normalized_points[None, None, None, ...],
+                    mode=self.interpolation_mode,
+                    align_corners=False,
+                )
+                .permute(0, 2, 3, 4, 1)
+                .squeeze()
+            )[
+                ..., None
+            ]  # note this None is required because of the squeeze operation :sweat_smile:
+            #interpolated_densities = self._density_postactivation(interpolated_densities)
 
         # ES Addition: Multiply by weights to get the final densities:
         weighted_densities = torch.sum(interpolated_densities * interpolated_weights, dim=-2)
+        weighted_densities = self._sigmoid(weighted_densities)*60.0
 
         # interpolate and compute features
         # ES Addition: change to 4D format to support torch grid sample
-        preactivated_features = self._feature_preactivation(self._high_res_features).float()
-        preactivated_features = torch.reshape(preactivated_features, (*preactivated_features.shape[0:-2], -1))
-        interpolated_features = (
-            grid_sample(
-                preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
-                normalized_points[None, None, None, ...],
-                mode=self.interpolation_mode,
-                align_corners=False,
+        with torch.no_grad():
+            preactivated_features = self._feature_preactivation(self._high_res_features).float()
+            preactivated_features = torch.reshape(preactivated_features, (*preactivated_features.shape[0:-2], -1))
+            interpolated_features = (
+                grid_sample(
+                    preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
+                    normalized_points[None, None, None, ...],
+                    mode=self.interpolation_mode,
+                    align_corners=False,
+                )
+                .permute(0, 2, 3, 4, 1)
+                .squeeze()
             )
-            .permute(0, 2, 3, 4, 1)
-            .squeeze()
-        )
-        interpolated_features = self._feature_postactivation(interpolated_features)
-        interpolated_features = torch.reshape(interpolated_features, (-1, *self._high_res_features.shape[-2:]))
+            interpolated_features = self._feature_postactivation(interpolated_features)
+            interpolated_features = torch.reshape(interpolated_features, (-1, *self._high_res_features.shape[-2:]))
 
         # ES Addition: Multiply by weights to get the final densities:
+        interpolated_weights = normalize(interpolated_weights, p=1, dim=-2)
         weighted_features = torch.sum(interpolated_features * interpolated_weights, dim=-2)
 
         # apply the radiance transfer function if it is not None and if view-directions are available

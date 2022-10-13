@@ -77,9 +77,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="number of samples taken per ray during training", show_default=True)
 @click.option("--render_num_samples_per_ray", type=click.INT, required=False, default=512,
               help="number of samples taken per ray during rendering", show_default=True)
-@click.option("--parallel_rays_chunk_size", type=click.INT, required=False, default=32768/8,
+@click.option("--parallel_rays_chunk_size", type=click.INT, required=False, default=32768,
               help="number of parallel rays processed on the GPU for accelerated rendering", show_default=True)
-@click.option("--ray_batch_size", type=click.INT, required=False, default=4096,
+@click.option("--ray_batch_size", type=click.INT, required=False, default=16384,
               help="number of randomly sampled rays used per training iteration", show_default=True)
 @click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1800,
               help="number of training iterations performed per stage", show_default=True)
@@ -120,7 +120,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # thre360_path options
 @click.option("--camera_pitch", type=click.FLOAT, default=60.0,
               required=False, help="pitch-angle value for the camera for 360 path animation")
-@click.option("--num_frames", type=click.IntRange(min=1), default=60,
+@click.option("--num_frames", type=click.IntRange(min=1), default=180,
               required=False, help="number of frames in the video")
 
 # Miscellaneous modes
@@ -173,113 +173,17 @@ def main(**kwargs) -> None:
     vol_mod, extra_info = create_volumetric_model_from_saved_model(
         model_path=highres_model_path,
         thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
+        device=device,
         num_clusters=config.clusters,
     )
 
     # ES Addition: initial experiment - naive trilinear downsampling
-    '''
     vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
                     vol_mod.thre3d_repr,
                     output_size=tuple(config.new_grid_dims),
                     mode="trilinear",
                 )
     vol_mod.thre3d_repr.interpolation_mode = 'nearest'
-    '''
-    
-    # ES Addition: Training new model!
-    # 1. Create VA model
-    # 1.a. Set up Activation dict
-    vox_grid_density_activations_dict = {
-            "density_preactivation": torch.nn.Identity(),
-            "density_postactivation": torch.nn.ReLU(),
-            # note this expected density value :)
-            "expected_density_scale": compute_expected_density_scale_for_relu_field_grid(
-                config.grid_world_size
-            ),
-        }
-    
-    # 1.b. Set up Dimensions and high res feautures / densities
-    total_block_size = int(vol_mod.thre3d_repr.densities.shape[0] / config.new_grid_dims[0]) * \
-        int(vol_mod.thre3d_repr.densities.shape[1] / config.new_grid_dims[1]) * \
-        int(vol_mod.thre3d_repr.densities.shape[2] / config.new_grid_dims[2])
-
-    weights = torch.empty((*config.new_grid_dims, total_block_size, 1), dtype=torch.float32, device=device)
-    torch.nn.init.uniform_(weights, -1.0, 1.0)
-    voxel_size = VoxelSize(*[dim_size / grid_dim for dim_size, grid_dim
-                             in zip(config.grid_world_size, config.new_grid_dims)])
-    
-    # 1.c. Create VoxelArtGrid class
-    voxel_grid = VoxelArtGrid(
-        high_res_densities=vol_mod.thre3d_repr.densities.data.to(device),
-        high_res_features=vol_mod.thre3d_repr.features.data.to(device),
-        downsample_weights=weights,
-        voxel_size=voxel_size,
-        grid_location=VoxelGridLocation(*config.grid_location),
-        **vox_grid_density_activations_dict,
-        tunable=True,
-    )
-
-    # 2. Set Dataset Parameters
-    # parse os-checked path-strings into Pathlike Paths :)
-    data_path = Path(config.data_path)
-    output_model_path = Path(config.out_model_path)
-
-    # save a copy of the configuration for reference
-    log.info("logging configuration file ...")
-    log_config_to_disk(config, output_model_path)
-
-    # create a datasets for training and testing:
-    train_dataset, test_dataset = (
-        PosedImagesDataset(
-            images_dir=data_path / mode,
-            camera_params_json=data_path / f"{mode}_camera_params.json",
-            normalize_scene_scale=config.normalize_scene_scale,
-            downsample_factor=config.data_downsample_factor,
-            rgba_white_bkgd=config.white_bkgd,
-        )
-    for mode in ("train", "test")
-    )
-
-    # 3. Set up a volumetricModel using the previously created voxel-grid
-    # noinspection PyTypeChecker
-    vox_grid_vol_mod = VolumetricModel(
-        thre3d_repr=voxel_grid,
-        render_procedure=render_sh_voxel_grid,
-        render_config=SHVoxGridRenderConfig(
-            num_samples_per_ray=config.train_num_samples_per_ray,
-            camera_bounds=train_dataset.camera_bounds,
-            white_bkgd=config.white_bkgd,
-            render_num_samples_per_ray=config.render_num_samples_per_ray,
-            parallel_rays_chunk_size=config.parallel_rays_chunk_size,
-        ),
-        device=device,
-    )
-
-    # 4. Call training function
-    # train the model:
-    train_sh_vox_grid_vol_mod_with_posed_images(
-        vol_mod=vox_grid_vol_mod,
-        train_dataset=train_dataset,
-        output_dir=output_model_path,
-        test_dataset=test_dataset,
-        ray_batch_size=config.ray_batch_size,
-        num_stages=1,
-        num_iterations_per_stage=config.num_iterations_per_stage,
-        scale_factor=1.0, # not really relevant as we use only one stage
-        learning_rate=config.learning_rate,
-        lr_decay_gamma_per_stage=config.lr_decay_gamma_per_stage,
-        lr_decay_steps_per_stage=config.lr_decay_steps_per_stage,
-        stagewise_lr_decay_gamma=config.stagewise_lr_decay_gamma,
-        save_freq=config.save_frequency,
-        test_freq=config.test_frequency,
-        feedback_freq=config.feedback_frequency,
-        summary_freq=config.summary_frequency,
-        apply_diffuse_render_regularization=config.apply_diffuse_render_regularization,
-        num_workers=config.num_workers,
-        verbose_rendering=config.verbose_rendering,
-        fast_debug_mode=config.fast_debug_mode,
-        voxelArt_mode=True,
-    )
 
 # -------------------------------------------------------------------------------------
 #  Rendering Output Video                                                             |

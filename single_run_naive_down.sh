@@ -18,11 +18,11 @@ export CUDA_VISIBLE_DEVICES=$gpu_num
 train_and_render() {
 	# training and rendering
 	echo "Starting Rendering..."
-	python learn_voxelArt_grid.py \
+	python learn_voxelArt_grid_naive.py \
 	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/saved_models/model_final.pth \
-	-r output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/ \
+	-r output_renders/${1}_naive_down_32/ \
 	-d data/${1}/ \
-	-o logs/rf/voxelArt_try_sigmoid_bilinear_32/
+	-o logs/rf/voxelArt_try_sigmoid_bilinear/
 }
 
 # STARTING RUN:

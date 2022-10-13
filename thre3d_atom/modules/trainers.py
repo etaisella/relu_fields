@@ -408,18 +408,19 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"TIME CHECK: time spent actually training "
                     f"till now: {timedelta(seconds=time_spent_actually_training)}"
                 )
-                visualize_sh_vox_grid_vol_mod_rendered_feedback(
-                    vol_mod=vol_mod,
-                    render_feedback_pose=render_feedback_pose,
-                    camera_intrinsics=camera_intrinsics,
-                    global_step=global_step,
-                    feedback_logs_dir=render_dir,
-                    parallel_rays_chunk_size=vol_mod.render_config.parallel_rays_chunk_size,
-                    training_time=time_spent_actually_training,
-                    log_diffuse_rendered_version=True,
-                    overridden_num_samples_per_ray=vol_mod.render_config.render_num_samples_per_ray,
-                    verbose_rendering=verbose_rendering,
-                )
+                with torch.no_grad():
+                    visualize_sh_vox_grid_vol_mod_rendered_feedback(
+                        vol_mod=vol_mod,
+                        render_feedback_pose=render_feedback_pose,
+                        camera_intrinsics=camera_intrinsics,
+                        global_step=global_step,
+                        feedback_logs_dir=render_dir,
+                        parallel_rays_chunk_size=vol_mod.render_config.parallel_rays_chunk_size,
+                        training_time=time_spent_actually_training,
+                        log_diffuse_rendered_version=True,
+                        overridden_num_samples_per_ray=vol_mod.render_config.render_num_samples_per_ray,
+                        verbose_rendering=verbose_rendering,
+                    )
 
             # obtain and log the test metrics
             if (
