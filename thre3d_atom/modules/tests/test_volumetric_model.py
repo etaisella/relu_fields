@@ -20,7 +20,7 @@ from thre3d_atom.utils.imaging_utils import (
     get_thre360_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
-    render_camera_path_for_volumetric_model,
+    render_camera_path_for_volumetric_model_3_coeff_modes,
 )
 
 
@@ -115,7 +115,7 @@ def test_volumetric_model_render_animation(device: torch.device) -> None:
         num_poses=num_poses,
     )
 
-    animation = render_camera_path_for_volumetric_model(
+    animation = render_camera_path_for_volumetric_model_3_coeff_modes(
         vox_grid_vol_mod, animation_poses, camera_intrinsics=camera_intrinsics
     )
 

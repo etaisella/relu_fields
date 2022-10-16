@@ -14,7 +14,8 @@ from thre3d_atom.utils.imaging_utils import (
     get_thre360_spiral_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
-    render_camera_path_for_volumetric_model,
+    render_camera_path_for_volumetric_model_3_coeff_modes,
+    render_camera_path_for_volumetric_model_3_coeff_modes_gray,
 )
 from easydict import EasyDict
 
@@ -58,6 +59,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ES ADDITIONS:
 @click.option("--clusters", type=click.IntRange(min=0), default=0,
               required=False, help="Number of clusters for SH coeff Quantization")
+@click.option("--gray_mode", type=click.BOOL, default=False,
+              required=False, help="Make zero coeffs gray to view the effects of higher order coeffs")
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -108,17 +111,18 @@ def main(**kwargs) -> None:
             f"Only available options are: ['thre360' and 'spiral']"
         )
 
-    animation_frames = render_camera_path_for_volumetric_model(
+    if config.gray_mode:
+        render_function = render_camera_path_for_volumetric_model_3_coeff_modes_gray
+    else:
+        render_function = render_camera_path_for_volumetric_model_3_coeff_modes
+
+    animation_frames = render_function(
         vol_mod=vol_mod,
         camera_path=animation_poses,
         camera_intrinsics=camera_intrinsics,
         overridden_num_samples_per_ray=config.overridden_num_samples_per_ray,
         render_scale_factor=config.render_scale_factor,
     )
-
-    # ES Addition: dumping frame 60
-    #data = im.fromarray(frame_60)
-    #data.save(output_path / "frame_60.png")
 
     imageio.mimwrite(
         output_path / "rendered_video.mp4",

@@ -28,7 +28,7 @@ from thre3d_atom.utils.imaging_utils import (
     get_thre360_spiral_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
-    render_camera_path_for_volumetric_model,
+    render_camera_path_for_volumetric_model_3_coeff_modes,
 )
 from thre3d_atom.thre3d_reprs.renderers import (
     render_sh_voxel_grid,
@@ -77,9 +77,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="number of samples taken per ray during training", show_default=True)
 @click.option("--render_num_samples_per_ray", type=click.INT, required=False, default=512,
               help="number of samples taken per ray during rendering", show_default=True)
-@click.option("--parallel_rays_chunk_size", type=click.INT, required=False, default=32768/8,
+@click.option("--parallel_rays_chunk_size", type=click.INT, required=False, default=32768/64,
               help="number of parallel rays processed on the GPU for accelerated rendering", show_default=True)
-@click.option("--ray_batch_size", type=click.INT, required=False, default=4096,
+@click.option("--ray_batch_size", type=click.INT, required=False, default=4096/4,
               help="number of randomly sampled rays used per training iteration", show_default=True)
 @click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1800,
               help="number of training iterations performed per stage", show_default=True)
@@ -313,7 +313,7 @@ def main(**kwargs) -> None:
             f"Only available options are: ['thre360' and 'spiral']"
         )
 
-    animation_frames = render_camera_path_for_volumetric_model(
+    animation_frames = render_camera_path_for_volumetric_model_3_coeff_modes(
         vol_mod=vol_mod,
         camera_path=animation_poses,
         camera_intrinsics=camera_intrinsics,

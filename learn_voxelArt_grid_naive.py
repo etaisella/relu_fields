@@ -28,7 +28,7 @@ from thre3d_atom.utils.imaging_utils import (
     get_thre360_spiral_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
-    render_camera_path_for_volumetric_model,
+    render_camera_path_for_volumetric_model_3_coeff_modes,
 )
 from thre3d_atom.thre3d_reprs.renderers import (
     render_sh_voxel_grid,
@@ -217,7 +217,7 @@ def main(**kwargs) -> None:
             f"Only available options are: ['thre360' and 'spiral']"
         )
 
-    animation_frames = render_camera_path_for_volumetric_model(
+    animation_frames = render_camera_path_for_volumetric_model_3_coeff_modes(
         vol_mod=vol_mod,
         camera_path=animation_poses,
         camera_intrinsics=camera_intrinsics,
