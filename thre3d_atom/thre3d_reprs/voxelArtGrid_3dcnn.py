@@ -1,6 +1,7 @@
 """ manually written sort-of-low-level implementation for voxel-based 3D volumetric representations """
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation, AxisAlignedBoundingBox
+from thre3d_atom.thre3d_reprs.unet3d import UNet3d
 
 import torch
 import torch.nn as nn
@@ -18,22 +19,24 @@ from thre3d_atom.thre3d_reprs.constants import (
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
 class cnn3d(nn.Module):
-  def __init__(self, input_channels, mid_channels, out_channels):
+  def __init__(self, input_channels, out_channels):
     super(cnn3d, self).__init__()
-    self.conv1 = nn.Conv3d(input_channels, mid_channels, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.conv2 = nn.Conv3d(mid_channels, mid_channels, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.conv3 = nn.Conv3d(mid_channels, out_channels, (3, 3, 3), stride=(1,1,1), padding=1)
+    self.conv1 = nn.Conv3d(input_channels, 64, (3, 3, 3), stride=(1,1,1), padding=1)
+    self.conv2 = nn.Conv3d(64, 64, (3, 3, 3), stride=(1,1,1), padding=1)
+    self.conv3 = nn.Conv3d(64, 128, (3, 3, 3), stride=(1,1,1), padding=1)
+    self.conv4 = nn.Conv3d(128, out_channels, (3, 3, 3), stride=(1,1,1), padding=1)
     self.avgpool = nn.AvgPool3d((2,2,2), stride=(2,2,2))
-    self.relu = nn.ReLU()
+    self.leakyRelu = nn.LeakyReLU(0.2)
   
   def forward(self, x):
     x = self.conv1(x)
-    x = self.relu(x)
-    x = self.avgpool(x)
+    x = self.leakyRelu(x)
     x = self.conv2(x)
-    x = self.relu(x)
+    x = self.avgpool(x)
     x = self.conv3(x)
-    x = self.relu(x)
+    x = self.leakyRelu(x)
+    x = self.conv4(x)
+    x = self.leakyRelu(x)
     return x
 
 class VoxelArtGrid_3DCNN(Module):
@@ -105,22 +108,26 @@ class VoxelArtGrid_3DCNN(Module):
         # ES addition: adding interpolation mode as a public member
         self.interpolation_mode = "bilinear"
 
-        if tunable:
-            self._downsample_weights = torch.nn.Parameter(self._downsample_weights)
-
         # either densities or features can be used:
         self._device = high_res_densities.device
 
+        # init high-res grid
+        # Concat densities and features into high-res grid
+        self._high_res_grid = torch.cat([self._high_res_densities, self._high_res_features], dim=-1)
+        self._high_res_grid = torch.permute(self._high_res_grid, (3, 0, 1, 2))
+        self._high_res_grid.requires_grad = False
+
         # init 3D CNN
         grid_channels = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
-        network_mid_channels = 64 # TODO: Change this to not be hard-coded
-        self._cnn3d = cnn3d(grid_channels, network_mid_channels, grid_channels).to(self._device)
+        #self._cnn3d = cnn3d(grid_channels, grid_channels)
+        self._cnn3d = UNet3d(grid_channels)
+        self._cnn3d = self._cnn3d.to(self._device)
 
         # note the x, y and z conventions for the width (+ve right), depth (+ve inwards) and height (+ve up)
         self.width_x, self.depth_y, self.height_z = (
-            self._new_grid_dims.shape[0],
-            self._new_grid_dims.shape[1],
-            self._new_grid_dims.shape[2],
+            self._new_grid_dims[0],
+            self._new_grid_dims[1],
+            self._new_grid_dims[2],
         )
 
         self.hr_width_x, self.hr_depth_y, self.hr_height_z = (
@@ -275,14 +282,15 @@ class VoxelArtGrid_3DCNN(Module):
         """
         # obtain the range-normalized points for interpolation
         normalized_points = self._normalize_points(points)
-        
-        # Concat densities and features into high-res grid
-        high_res_grid = torch.cat([self._high_res_densities, self._high_res_features], dim=-1)
 
         # get low res-grid from high-res grid via 3D-CNN
-        low_res_grid = self._cnn3d(high_res_grid)
-        low_res_densities = low_res_grid[..., 0]
+        #torch.save(self._high_res_grid, "high_res_grid.pt")
+        low_res_grid = self._cnn3d(torch.unsqueeze(self._high_res_grid, 0))
+        low_res_grid = torch.squeeze(low_res_grid)
+        low_res_grid = torch.permute(low_res_grid, (1, 2, 3, 0))
+        low_res_densities = torch.unsqueeze(low_res_grid[..., 0], -1)
         low_res_features = low_res_grid[..., 1:]
+        low_res_features[...,:]
 
         # interpolate and compute densities
         # Note the pre- and post-activations :)

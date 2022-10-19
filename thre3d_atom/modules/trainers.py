@@ -11,6 +11,8 @@ from torch.nn.functional import l1_loss, mse_loss
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+import GPUtil
+
 from thre3d_atom.data.datasets import PosedImagesDataset
 from thre3d_atom.data.utils import infinite_dataloader
 from thre3d_atom.modules.testers import test_sh_vox_grid_vol_mod_with_posed_images
@@ -27,6 +29,7 @@ from thre3d_atom.thre3d_reprs.voxels import (
     scale_voxel_grid_with_required_output_size,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
+from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
 from thre3d_atom.utils.constants import (
     CAMERA_BOUNDS,
     CAMERA_INTRINSICS,
@@ -116,9 +119,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
     # assertions about the VolumetricModel being used with this TrainProcedure :)
-    assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid), (
+    assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid) \
+        or isinstance(vol_mod.thre3d_repr, VoxelArtGrid_3DCNN), (
         f"sorry, cannot use a {type(vol_mod.thre3d_repr)} with this TrainProcedure :(; "
-        f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} can be used"
+        f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} or {type(VoxelArtGrid_3DCNN)} can be used"
     )
     assert (
         vol_mod.render_procedure == render_sh_voxel_grid
@@ -154,8 +158,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # reinitialize the scaled features and densities to remove any bias
             random_initializer(vol_mod.thre3d_repr.densities)
             random_initializer(vol_mod.thre3d_repr.features)
-    else:
-        random_initializer(vol_mod.thre3d_repr.downsample_weights)
 
     # setup render_feedback_pose
     real_feedback_image = None
@@ -283,6 +285,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # please check the `data.datasets` module
             images, poses = next(infinite_train_dl)
 
+            # ES Addition: Printing GPU metrics:
+            #GPUtil.showUtilization()
+
             # cast rays for all the loaded images:
             rays_list = []
             for pose in poses:
@@ -317,7 +322,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             total_loss = l1_loss(specular_rendered_pixels_batch, pixels_batch)
 
             # logging info:
-            specular_loss_value = total_loss
+            specular_loss_value = total_loss.item()
             specular_psnr_value = mse2psnr(
                 mse_loss(specular_rendered_pixels_batch, pixels_batch)
             )
@@ -336,7 +341,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 total_loss = total_loss + diffuse_loss
 
                 # logging info:
-                diffuse_loss_value = diffuse_loss
+                diffuse_loss_value = diffuse_loss.item()
                 diffuse_psnr_value = mse2psnr(
                     mse_loss(diffuse_rendered_pixels_batch, pixels_batch)
                 )
@@ -345,6 +350,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
+            torch.cuda.empty_cache()
             # ---------------------------------------------------------------------------------
 
             # rest of the code per iteration is related to saving/logging/feedback/testing
@@ -380,12 +386,12 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"Stage: {stage} "
                     f"Global Iteration: {global_step} "
                     f"Stage Iteration: {stage_iteration} "
-                    f"specular_loss: {specular_loss_value.item(): .3f} "
+                    f"specular_loss: {specular_loss_value: .3f} "
                     f"specular_psnr: {specular_psnr_value.item(): .3f} "
                 )
                 if apply_diffuse_render_regularization:
                     loss_info_string += (
-                        f"diffuse_loss: {diffuse_loss_value.item(): .3f} "
+                        f"diffuse_loss: {diffuse_loss_value: .3f} "
                         f"diffuse_psnr: {diffuse_psnr_value.item(): .3f} "
                         f"total_loss: {total_loss: .3f} "
                     )

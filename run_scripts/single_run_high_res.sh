@@ -3,10 +3,11 @@ echo "Starting Run!"
 
 # Reading arguments:
 gpu_num=0
-while getopts g: flag
+while getopts g:d: flag
 do
     case "${flag}" in
         g) gpu_num=${OPTARG};;
+		d) scene_in=${OPTARG};;
     esac
 done
 
@@ -40,7 +41,7 @@ train_and_render() {
 
 # STARTING RUN:
 
-scene=drums
+scene=$scene_in
 scale_factor=2.0
 num_iterations_per_stage=500
 learning_rate=0.03

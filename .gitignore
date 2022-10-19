@@ -140,3 +140,4 @@ logs/
 # ETAI ADDITIONS:
 *.save
 *.zip
+*.pt
