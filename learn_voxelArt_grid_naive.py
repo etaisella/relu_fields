@@ -149,7 +149,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ES ADDITIONS:
 @click.option("--clusters", type=click.IntRange(min=0), default=0,
               required=False, help="number of SH cluster centers")
-@click.option("--new_grid_dims", type=click.INT, nargs=3, required=False, default=(32, 32, 32),
+@click.option("--new_grid_dims", type=click.INT, nargs=3, required=False, default=(64, 64, 64),
               help="dimensions (#voxels) of the new grid along x, y and z axes", show_default=True)
 
 # fmt: on

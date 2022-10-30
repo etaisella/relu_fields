@@ -18,27 +18,6 @@ from thre3d_atom.thre3d_reprs.constants import (
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
-class cnn3d(nn.Module):
-  def __init__(self, input_channels, out_channels):
-    super(cnn3d, self).__init__()
-    self.conv1 = nn.Conv3d(input_channels, 64, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.conv2 = nn.Conv3d(64, 64, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.conv3 = nn.Conv3d(64, 128, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.conv4 = nn.Conv3d(128, out_channels, (3, 3, 3), stride=(1,1,1), padding=1)
-    self.avgpool = nn.AvgPool3d((2,2,2), stride=(2,2,2))
-    self.leakyRelu = nn.LeakyReLU(0.2)
-  
-  def forward(self, x):
-    x = self.conv1(x)
-    x = self.leakyRelu(x)
-    x = self.conv2(x)
-    x = self.avgpool(x)
-    x = self.conv3(x)
-    x = self.leakyRelu(x)
-    x = self.conv4(x)
-    x = self.leakyRelu(x)
-    return x
-
 class VoxelArtGrid_3DCNN(Module):
     def __init__(
         self,
@@ -117,12 +96,6 @@ class VoxelArtGrid_3DCNN(Module):
         self._high_res_grid = torch.permute(self._high_res_grid, (3, 0, 1, 2))
         self._high_res_grid.requires_grad = False
 
-        # init 3D CNN
-        grid_channels = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
-        #self._cnn3d = cnn3d(grid_channels, grid_channels)
-        self._cnn3d = UNet3d(grid_channels)
-        self._cnn3d = self._cnn3d.to(self._device)
-
         # note the x, y and z conventions for the width (+ve right), depth (+ve inwards) and height (+ve up)
         self.width_x, self.depth_y, self.height_z = (
             self._new_grid_dims[0],
@@ -135,6 +108,14 @@ class VoxelArtGrid_3DCNN(Module):
             high_res_densities.shape[1],
             high_res_densities.shape[2],
         )
+
+        small_mode = (self.hr_width_x / self.width_x == 4) and \
+            (self.hr_depth_y / self.depth_y == 4) and (self.hr_height_z / self.height_z == 4)  
+
+        # init 3D CNN
+        grid_channels = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
+        self._cnn3d = UNet3d(grid_channels, small=small_mode)
+        self._cnn3d = self._cnn3d.to(self._device)
 
         # prepare high res features and densities
         self._high_res_densities.requires_grad = False

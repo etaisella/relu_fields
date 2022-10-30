@@ -3,10 +3,11 @@ echo "Starting Run!"
 
 # Reading arguments:
 gpu_num=0
-while getopts g: flag
+while getopts g:d: flag
 do
     case "${flag}" in
         g) gpu_num=${OPTARG};;
+		d) scene_in=${OPTARG};;
     esac
 done
 
@@ -20,19 +21,19 @@ train_and_render() {
 	echo "Starting Rendering..."
 	python learn_voxelArt_grid_naive.py \
 	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/saved_models/model_final.pth \
-	-r output_renders/${1}_naive_down_32/ \
+	-r output_renders/${1}_naive_down_64/ \
 	-d data/${1}/ \
 	-o logs/rf/voxelArt_try_sigmoid_bilinear/
 }
 
 # STARTING RUN:
 
-scene=lego
+scene=$scene_in
 scale_factor=2.0
 num_iterations_per_stage=500
 learning_rate=0.03
 num_stages=4
-train_num_samples_per_ray=256
+train_num_samples_per_ray=512
 gird_dim=128
 sh_degree=2
 clusters=0

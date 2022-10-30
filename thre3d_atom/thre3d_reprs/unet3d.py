@@ -41,16 +41,10 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-
-        # if bilinear, use the normal convolutions to reduce the number of channels
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
-        else:
-            self.up = nn.ConvTranspose3d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+        self.up = nn.ConvTranspose3d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
@@ -58,8 +52,6 @@ class Up(nn.Module):
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
         diffZ = x2.size()[4] - x1.size()[4]
-
-        #print(f"diffY - {diffY}, diffX - {diffX}, diffY - {diffX}")
 
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, 
                         diffY // 2, diffY - diffY // 2, 
@@ -80,22 +72,19 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class UNet3d(nn.Module):
-    def __init__(self, n_channels, bilinear=False):
+    def __init__(self, n_channels, small=False):
         super(UNet3d, self).__init__()
         self.n_channels = n_channels
-        self.bilinear = bilinear
-
+        self.small = small
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
-        factor = 2 if bilinear else 1
-        self.down4 = Down(512, 1024 // factor)
-        self.up1 = Up(1024, 512 // factor, bilinear)
-        self.up2 = Up(512, 256 // factor, bilinear)
-        #self.up3 = Up(256, 128 // factor, bilinear)
-        self.up3 = Up(256, 64, bilinear)
-        #self.up4 = Up(128, 64, bilinear)
+        self.down4 = Down(512, 1024)
+        self.up1 = Up(1024, 512)
+        self.up2 = Up(512, 256)
+        self.up3 = Up(256, 64)
+        self.up2_small = Up(512, 64)
         self.outc = OutConv(64, n_channels)
 
     def forward(self, x):
@@ -105,8 +94,10 @@ class UNet3d(nn.Module):
         x4 = self.down3(x3)
         x5 = self.down4(x4)
         x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        #x = self.up4(x, x1)
+        if self.small:
+            x = self.up2_small(x, x3)
+        else:
+            x = self.up2(x, x3)
+            x = self.up3(x, x2)
         logits = self.outc(x)
         return logits

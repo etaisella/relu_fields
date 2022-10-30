@@ -42,7 +42,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @click.option("--camera_path", type=click.Choice(["thre360", "spiral"]), default="thre360",
               required=False, help="which camera path to use for rendering the animation")
 # thre360_path options
-@click.option("--camera_pitch", type=click.FLOAT, default=60.0,
+@click.option("--camera_pitch", type=click.FLOAT, default=50.0,
               required=False, help="pitch-angle value for the camera for 360 path animation")
 @click.option("--num_frames", type=click.IntRange(min=1), default=180,
               required=False, help="number of frames in the video")
@@ -114,6 +114,7 @@ def main(**kwargs) -> None:
     if config.gray_mode:
         render_function = render_camera_path_for_volumetric_model_3_coeff_modes_gray
     else:
+        print("Rendering in non-gray mode")
         render_function = render_camera_path_for_volumetric_model_3_coeff_modes
 
     animation_frames = render_function(
