@@ -2,7 +2,7 @@
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation, AxisAlignedBoundingBox
 from thre3d_atom.thre3d_reprs.unet3d import UNet3d
-
+from thre3d_atom.thre3d_reprs.cnn3d_naive_down import cnn3d_naive_down
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -39,6 +39,7 @@ class VoxelArtGrid_3DCNN(Module):
         radiance_transfer_function: Callable[[Tensor, Tensor], Tensor] = None,
         expected_density_scale: float = 1.0,
         tunable: bool = False,
+        naive_down: bool = False,
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -114,7 +115,11 @@ class VoxelArtGrid_3DCNN(Module):
 
         # init 3D CNN
         grid_channels = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
-        self._cnn3d = UNet3d(grid_channels, small=small_mode)
+        if naive_down:
+            self._cnn3d = cnn3d_naive_down(grid_channels, small=small_mode)
+        else:
+            self._cnn3d = UNet3d(grid_channels, small=small_mode)
+        
         self._cnn3d = self._cnn3d.to(self._device)
 
         # prepare high res features and densities

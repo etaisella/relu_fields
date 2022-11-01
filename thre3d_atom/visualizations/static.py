@@ -154,6 +154,27 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
         specular_feedback_image,
     )
 
+    # ES Addition: Render Voxelized Version
+    vol_mod.thre3d_repr.interpolation_mode = "nearest"
+    nn_specular_rendered_output = vol_mod.render(
+        camera_pose=render_feedback_pose,
+        camera_intrinsics=camera_intrinsics,
+        parallel_rays_chunk_size=parallel_rays_chunk_size,
+        gpu_render=True,
+        verbose=verbose_rendering,
+        optimized_sampling=use_optimized_sampling_mode,
+        num_samples_per_ray=overridden_num_samples_per_ray_for_beautiful_renders,
+    )
+    nn_specular_feedback_image = _process_rendered_output_for_feedback_log(
+        nn_specular_rendered_output, vol_mod.render_config.camera_bounds, training_time
+    )
+    vol_mod.thre3d_repr.interpolation_mode = "bilinear"
+
+    imageio.imwrite(
+        feedback_logs_dir / f"voxelized_{global_step}.png",
+        nn_specular_feedback_image,
+    )
+
     if log_diffuse_rendered_version:
         diffuse_rendered_output = vol_mod.render(
             camera_pose=render_feedback_pose,

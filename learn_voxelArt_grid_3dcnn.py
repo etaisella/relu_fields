@@ -68,6 +68,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=True, help="path to the output VA model")
 @click.option("-d", "--data_path", type=click.Path(file_okay=False, dir_okay=True),
               required=True, help="path to the input dataset")
+@click.option("-n", "--naive_downsample_mode", type=click.BOOL, required=False, default=False,
+              help="whether to naivly downsample a 128^3 grid to the given size or to learn a new one", 
+              show_default=True)
 
 # Non-required Training Configurations options:
 @click.option("--white_bkgd", type=click.BOOL, required=False, default=True,
@@ -206,6 +209,7 @@ def main(**kwargs) -> None:
         grid_location=VoxelGridLocation(*config.grid_location),
         **vox_grid_density_activations_dict,
         tunable=True,
+        naive_down=config.naive_downsample_mode
     )
 
     # 2. Set Dataset Parameters
