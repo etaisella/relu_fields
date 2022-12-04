@@ -213,6 +213,19 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     # setup tensorboard writer
     tensorboard_writer = SummaryWriter(str(tensorboard_dir))
 
+    # create camera-rays visualization:	
+    if not fast_debug_mode:	
+        log.info(	
+            "creating a camera-rays visualization... please wait... "	
+            "this is a slow operation :D"	
+        )	
+        visualize_camera_rays(	
+            train_dataset,	
+            output_dir,	
+            num_rays_per_image=1,	
+        )
+
+
     # start actual training
     log.info("beginning training")
     time_spent_actually_training = 0

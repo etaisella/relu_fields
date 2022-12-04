@@ -14,6 +14,7 @@ from thre3d_atom.utils.imaging_utils import (
     get_thre360_spiral_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
+    render_camera_path_for_volumetric_model,
     render_camera_path_for_volumetric_model_3_coeff_modes,
     render_camera_path_for_volumetric_model_3_coeff_modes_gray,
 )
@@ -61,6 +62,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=False, help="Number of clusters for SH coeff Quantization")
 @click.option("--gray_mode", type=click.BOOL, default=False,
               required=False, help="Make zero coeffs gray to view the effects of higher order coeffs")
+@click.option("--three_coeff_mode", type=click.BOOL, default=False,
+              required=False, help="Render the three diffreent coeff modes to see the effectd")
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -112,10 +115,14 @@ def main(**kwargs) -> None:
         )
 
     if config.gray_mode:
+        print("Rendering in gray mode mode")
         render_function = render_camera_path_for_volumetric_model_3_coeff_modes_gray
-    else:
-        print("Rendering in non-gray mode")
+    elif config.three_coeff_mode:
+        print("Rendering in three coeff mode")
         render_function = render_camera_path_for_volumetric_model_3_coeff_modes
+    else:
+        print("Rendering normal mode")
+        render_function = render_camera_path_for_volumetric_model
 
     animation_frames = render_function(
         vol_mod=vol_mod,

@@ -20,8 +20,8 @@ render_lapse() {
 	# Train:
 	echo "Starting Rendering..."
 	python render_training_lapse.py \
-	-i logs/rf/voxelArt_try_${1}_3dcnn_32_naive_False/training_logs/rendered_output/ \
-	-o logs/rf/voxelArt_try_${1}_3dcnn_32_naive_False/training_logs/rendered_output/lapse_voxelized.mp4
+	-i logs/rf/voxelArt_try_${1}_3dcnn_32_naive_False_init_noise_lego/training_logs/rendered_output/ \
+	-o logs/rf/voxelArt_try_${1}_3dcnn_32_naive_False_init_noise_lego/training_logs/rendered_output/lapse_specular.mp4
 }
 
 # STARTING RUN:

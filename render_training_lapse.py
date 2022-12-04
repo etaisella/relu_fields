@@ -49,7 +49,7 @@ def main(**kwargs) -> None:
     # Line thickness of 2 px
     thickness = 2
 
-    for filename in natsorted(glob.glob(str(log_path / "voxelized_*.png"))):
+    for filename in natsorted(glob.glob(str(log_path / "specular_*.png"))):
         img = cv2.imread(filename)
         text = os.path.basename(os.path.normpath(filename))
         img = cv2.putText(img, text, org, font, 

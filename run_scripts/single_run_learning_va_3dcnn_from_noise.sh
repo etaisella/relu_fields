@@ -3,7 +3,7 @@ echo "Starting Run!"
 
 # Reading arguments:
 gpu_num=0
-new_grid_dim=64
+new_grid_dim=32
 naive_mode=False
 
 while getopts g:d:r:n: flag
@@ -27,10 +27,10 @@ train_and_render() {
 	# training and rendering
 	echo "Starting Rendering..."
 	python learn_voxelArt_grid_3dcnn.py \
-	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/saved_models/model_final.pth \
+	-i logs/rf/lego_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/saved_models/model_final.pth \
 	-r output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_shdeg${8}_clusters${9}/ \
 	-d data/${1}/ \
-	-o logs/rf/voxelArt_try_${1}_3dcnn_${10}_naive_${11}_init_noise_${12}/ \
+	-o logs/rf/voxelArt_try_${1}_3dcnn_${10}_naive_${11}_init_noise_lego/ \
 	-n ${11} \
 	--new_grid_dims=${10} ${10} ${10} \
 	--init_noise=${12}
@@ -47,7 +47,7 @@ train_num_samples_per_ray=512
 gird_dim=128
 sh_degree=2
 clusters=0
-init_noise=True
+init_noise=False
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $sh_degree $clusters $new_grid_dim $naive_mode $init_noise
