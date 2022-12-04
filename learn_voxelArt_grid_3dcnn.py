@@ -1,4 +1,5 @@
 from pathlib import Path
+from xml.sax.handler import DTDHandler
 from PIL import Image as im
 import click
 import imageio
@@ -14,6 +15,7 @@ from thre3d_atom.data.datasets import PosedImagesDataset
 
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
+from thre3d_atom.thre3d_reprs.unet3d import get_noise
 
 from thre3d_atom.modules.volumetric_model import VolumetricModel
 
@@ -157,6 +159,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ES ADDITIONS:
 @click.option("--clusters", type=click.IntRange(min=0), default=0,
               required=False, help="number of SH cluster centers")
+@click.option("--init_noise", type=click.BOOL, default=False,
+              required=False, help="if this is True the input of the 3D unet is constant noise")
 @click.option("--new_grid_dims", type=click.INT, nargs=3, required=False, default=(64, 64, 64),
               help="dimensions (#voxels) of the new grid along x, y and z axes", show_default=True)
 
@@ -177,12 +181,20 @@ def main(**kwargs) -> None:
     # create the output path if it doesn't exist
     output_render_path.mkdir(exist_ok=True, parents=True)
 
-    # load volumetric_model from the model_path
-    vol_mod, extra_info = create_volumetric_model_from_saved_model(
-        model_path=highres_model_path,
-        thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
-        num_clusters=config.clusters,
-    )
+    if config.init_noise:
+        print("Setting U-Net input to noise")
+        high_res_densities = get_noise(1, 'noise', (128, 128, 128)).to(device).detach()
+        high_res_features = get_noise(27, 'noise', (128, 128, 128)).to(device).detach()
+    else:
+        # load volumetric_model from the model_path
+        print("Setting U-Net input to high res model")
+        vol_mod, extra_info = create_volumetric_model_from_saved_model(
+            model_path=highres_model_path,
+            thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
+            num_clusters=config.clusters,
+        )
+        high_res_densities=vol_mod.thre3d_repr.densities.data.to(device)
+        high_res_features=vol_mod.thre3d_repr.features.data.to(device)
 
     # ES Addition: Training new model!
     # 1. Create VA model
@@ -195,6 +207,7 @@ def main(**kwargs) -> None:
                 config.grid_world_size
             ),
         }
+        
     
     # 1.b. Set up Voxel Size
     voxel_size = VoxelSize(*[dim_size / grid_dim for dim_size, grid_dim
@@ -202,8 +215,8 @@ def main(**kwargs) -> None:
     
     # 1.c. Create VoxelArtGrid_3DCNN class
     voxel_grid = VoxelArtGrid_3DCNN(
-        high_res_densities=vol_mod.thre3d_repr.densities.data.to(device),
-        high_res_features=vol_mod.thre3d_repr.features.data.to(device),
+        high_res_densities=high_res_densities,
+        high_res_features=high_res_features,
         new_grid_dims=config.new_grid_dims,
         voxel_size=voxel_size,
         grid_location=VoxelGridLocation(*config.grid_location),
