@@ -23,6 +23,8 @@ from thre3d_atom.thre3d_reprs.constants import (
     THRE3D_REPR,
     RENDER_CONFIG_TYPE,
 )
+from thre3d_atom.thre3d_reprs.voxels import create_voxel_grid_from_saved_info_dict
+from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
 from thre3d_atom.utils.constants import NUM_COLOUR_CHANNELS
 from thre3d_atom.thre3d_reprs.renderers import RenderProcedure, RenderConfig
 from thre3d_atom.utils.constants import EXTRA_INFO
@@ -185,11 +187,71 @@ def create_volumetric_model_from_saved_model(
     # load the saved model's data using
     model_data = torch.load(model_path, map_location=device)
     thre3d_repr = thre3d_repr_creator(model_data)
-    # ES Addition - Print the interpolation mode the model has been trained with:
-    #print(f"Current Interpolation mode: {thre3d_repr.interpolation_mode}")
-    # ES Addition - Change the interpolation mode:
-    #thre3d_repr.interpolation_mode = 'nearest'
-    #print(f"Interpolation mode changed to: {thre3d_repr.interpolation_mode}")
+    render_config = model_data[RENDER_CONFIG_TYPE](**model_data[RENDER_CONFIG])
+
+    # ES Addition - Quantize zero order coeffs:
+    if num_clusters != 0:
+        coeff_grid = thre3d_repr.features.data
+        x_grid, y_grid, z_grid, _ = coeff_grid.shape
+        coeff_grid = coeff_grid.reshape(x_grid, y_grid, z_grid, NUM_COLOUR_CHANNELS, -1)
+        coeff_grid_zero = coeff_grid[..., :1]
+        grid_flat = coeff_grid_zero.view(-1, NUM_COLOUR_CHANNELS) 
+    
+        # run K-means:
+        cluster_ids_x, cluster_centers = kmeans(
+        X=grid_flat, num_clusters=num_clusters, distance='euclidean', device=device
+        )
+    
+        # quantize coefficients:
+        q_grid_flat = cluster_centers[cluster_ids_x[:],:]
+        q_grid = q_grid_flat.reshape(x_grid, y_grid, z_grid, NUM_COLOUR_CHANNELS)
+        coeff_grid[..., :1] = torch.unsqueeze(q_grid, -1)
+        thre3d_repr.features.data = coeff_grid.reshape(x_grid, y_grid, z_grid, -1)
+
+    # return a newly constructed VolumetricModel using the info above
+    # and the additional information saved at the time of training :)
+    return (
+        VolumetricModel(
+            thre3d_repr=thre3d_repr,
+            render_procedure=model_data[RENDER_PROCEDURE],
+            render_config=render_config,
+            device=device,
+        ),
+        model_data[EXTRA_INFO],
+    )
+
+def create_voxel_grid_from_saved_info_dict_va(saved_info: Dict[str, Any], 
+                                            high_res_densities, 
+                                            high_res_features) -> VoxelArtGrid_3DCNN:
+    voxel_grid = VoxelArtGrid_3DCNN(
+        high_res_densities=high_res_densities,
+        high_res_features=high_res_features,
+        **saved_info[THRE3D_REPR][CONFIG_DICT]
+    )
+
+    voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])
+    return voxel_grid
+
+def create_volumetric_model_from_saved_model_va_3dcnn(
+    model_path: Path,
+    high_res_model_path: Path,
+    device: torch.device = torch.device("cpu"),
+    num_clusters: int = 0,
+) -> Tuple[VolumetricModel, Dict[str, Any]]:
+    
+    # 1. Load high res model:
+    vol_mod, extra_info = create_volumetric_model_from_saved_model(
+            model_path=high_res_model_path,
+            thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
+            num_clusters=num_clusters,
+        )
+    high_res_densities=vol_mod.thre3d_repr.densities.data.to(device)
+    high_res_features=vol_mod.thre3d_repr.features.data.to(device)
+
+    model_data = torch.load(model_path, map_location=device)
+    thre3d_repr = create_voxel_grid_from_saved_info_dict_va(model_data, \
+        high_res_densities, \
+        high_res_features)
     render_config = model_data[RENDER_CONFIG_TYPE](**model_data[RENDER_CONFIG])
 
     # ES Addition - Quantize zero order coeffs:

@@ -123,11 +123,10 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class UNet3d(nn.Module):
-    def __init__(self, n_channels, small=False):
+    def __init__(self, num_channels_in, num_channels_out, small=False):
         super(UNet3d, self).__init__()
-        self.n_channels = n_channels
         self.small = small
-        self.inc = DoubleConv(n_channels, 64)
+        self.inc = DoubleConv(num_channels_in, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
@@ -136,7 +135,7 @@ class UNet3d(nn.Module):
         self.up2 = Up(512, 256)
         self.up3 = Up(256, 64)
         self.up2_small = Up(512, 64)
-        self.outc = OutConv(64, n_channels)
+        self.outc = OutConv(64, num_channels_out)
 
     def forward(self, x):
         x1 = self.inc(x)

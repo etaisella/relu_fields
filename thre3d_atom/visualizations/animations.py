@@ -189,8 +189,6 @@ def render_camera_path_for_volumetric_model(
 
     rendered_frames = []
     total_frames = len(camera_path) + 1
-    original_features = torch.zeros_like(vol_mod.thre3d_repr.features.data)
-    original_features[:] = vol_mod.thre3d_repr.features.data[:]
     for frame_num, render_pose in enumerate(camera_path):
         log.info(f"rendering frame number: ({frame_num + 1}/{total_frames})")
         rendered_output_all_coeffs = vol_mod.render(

@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 import GPUtil
+import wandb
 
 from thre3d_atom.data.datasets import PosedImagesDataset
 from thre3d_atom.data.utils import infinite_dataloader
@@ -27,6 +28,10 @@ from thre3d_atom.thre3d_reprs.renderers import render_sh_voxel_grid
 from thre3d_atom.thre3d_reprs.voxels import (
     VoxelGrid,
     scale_voxel_grid_with_required_output_size,
+)
+from thre3d_atom.thre3d_reprs.voxels_zero_one import (
+    VoxelGrid_ZeroOne,
+    scale_zero_one_voxel_grid_with_required_output_size,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
@@ -84,6 +89,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     verbose_rendering: bool = True,
     fast_debug_mode: bool = False,
     voxelArt_mode: bool = False,
+    direct_zero_one_mode: bool = False,
+    activate_zero_one_iter: int = -1
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -119,11 +126,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
     # assertions about the VolumetricModel being used with this TrainProcedure :)
-    assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid) \
-        or isinstance(vol_mod.thre3d_repr, VoxelArtGrid_3DCNN), (
-        f"sorry, cannot use a {type(vol_mod.thre3d_repr)} with this TrainProcedure :(; "
-        f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} or {type(VoxelArtGrid_3DCNN)} can be used"
-    )
+    #assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid) \
+    #    or isinstance(vol_mod.thre3d_repr, VoxelArtGrid_3DCNN), (
+    #    f"sorry, cannot use a {type(vol_mod.thre3d_repr)} with this TrainProcedure :(; "
+    #    f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} or {type(VoxelArtGrid_3DCNN)} can be used"
+    #)
     assert (
         vol_mod.render_procedure == render_sh_voxel_grid
     ), f"sorry, non SH-based VoxelGrids cannot be used with this TrainProcedure"
@@ -150,11 +157,18 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         with torch.no_grad():
             # TODO: Possibly create a nice interface for reprs as a resolution of the below warning
             # noinspection PyTypeChecker
-            vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
-                vol_mod.thre3d_repr,
-                output_size=stagewise_voxel_grid_sizes[0],
-                mode="trilinear",
-            )
+            if direct_zero_one_mode:
+                vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
+                    vol_mod.thre3d_repr,
+                    output_size=stagewise_voxel_grid_sizes[0],
+                    mode="trilinear",
+                )
+            else:
+                vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
+                    vol_mod.thre3d_repr,
+                    output_size=stagewise_voxel_grid_sizes[0],
+                    mode="trilinear",
+                )
             # reinitialize the scaled features and densities to remove any bias
             random_initializer(vol_mod.thre3d_repr.densities)
             random_initializer(vol_mod.thre3d_repr.features)
@@ -272,6 +286,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             param_group["lr"] for param_group in optimizer.param_groups
         ]
         log_string = f"current stage learning rates: {current_stage_lrs} "
+
         log.info(log_string)
         last_time = time.perf_counter()
         # -------------------------------------------------------------------------------------
@@ -357,6 +372,20 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # rest of the code per iteration is related to saving/logging/feedback/testing
             time_spent_actually_training += time.perf_counter() - last_time
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
+            
+            # ES Addition: activate zero one density at a certain step:
+            if global_step == activate_zero_one_iter:
+                print("ACTIVATING ZERO ONE DENSITY")
+                vol_mod.thre3d_repr.zero_one_active = True
+
+            # wandb logging:
+            wandb.log({"current LR" : float(current_stage_lrs[0])}, step=global_step)
+            wandb.log({"training stage" : stage}, step=global_step)
+            wandb.log({"specular_loss" : specular_loss_value}, step=global_step)
+            wandb.log({"diffuse_loss" : diffuse_loss_value}, step=global_step)
+            wandb.log({"specular_psnr" : specular_psnr_value}, step=global_step)
+            wandb.log({"diffuse_psnr" : diffuse_psnr_value}, step=global_step)
+            wandb.log({"total_loss" : total_loss}, step=global_step)
 
             # tensorboard summaries feedback
             if (
@@ -455,16 +484,33 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 log.info(
                     f"saving model-snapshot at stage {stage}, global step {global_step}"
                 )
-                torch.save(
-                    vol_mod.get_save_info(
-                        extra_info={
-                            CAMERA_BOUNDS: camera_bounds,
-                            CAMERA_INTRINSICS: camera_intrinsics,
-                            HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                        }
-                    ),
-                    model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
-                )
+                
+                if direct_zero_one_mode:
+                    z1_grid = vol_mod.thre3d_repr
+                    regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
+                    vol_mod.thre3d_repr = regular_grid
+                    torch.save(
+                        vol_mod.get_save_info(
+                            extra_info={
+                                CAMERA_BOUNDS: camera_bounds,
+                                CAMERA_INTRINSICS: camera_intrinsics,
+                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                            }
+                        ),
+                        model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
+                    )
+                    vol_mod.thre3d_repr = z1_grid
+                else:
+                    torch.save(
+                        vol_mod.get_save_info(
+                            extra_info={
+                                CAMERA_BOUNDS: camera_bounds,
+                                CAMERA_INTRINSICS: camera_intrinsics,
+                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                            }
+                        ),
+                        model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
+                    )
 
             # ignore all the time spent doing verbose stuff :) and update
             # the last_time clock event
@@ -476,11 +522,18 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # upsample the feature-grid after the completion of the stage:
             with torch.no_grad():
                 # noinspection PyTypeChecker
-                vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
-                    vol_mod.thre3d_repr,
-                    output_size=stagewise_voxel_grid_sizes[stage],
-                    mode="trilinear",
-                )
+                if direct_zero_one_mode:
+                    vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
+                        vol_mod.thre3d_repr,
+                        output_size=stagewise_voxel_grid_sizes[stage],
+                        mode="trilinear",
+                    )
+                else:
+                    vol_mod.thre3d_repr = scale_voxel_grid_with_required_output_size(
+                        vol_mod.thre3d_repr,
+                        output_size=stagewise_voxel_grid_sizes[stage],
+                        mode="trilinear",
+                    )
     # -----------------------------------------------------------------------------------------
 
     # save the final trained model

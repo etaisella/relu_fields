@@ -161,6 +161,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=False, help="number of SH cluster centers")
 @click.option("--init_noise", type=click.BOOL, default=False,
               required=False, help="if this is True the input of the 3D unet is constant noise")
+@click.option("--zero_one_density", type=click.BOOL, default=True,
+              required=False, help="whether to use zero one density :( ")
 @click.option("--new_grid_dims", type=click.INT, nargs=3, required=False, default=(64, 64, 64),
               help="dimensions (#voxels) of the new grid along x, y and z axes", show_default=True)
 
@@ -222,7 +224,8 @@ def main(**kwargs) -> None:
         grid_location=VoxelGridLocation(*config.grid_location),
         **vox_grid_density_activations_dict,
         tunable=True,
-        naive_down=config.naive_downsample_mode
+        naive_down=config.naive_downsample_mode,
+        zero_one_density=config.zero_one_density
     )
 
     # 2. Set Dataset Parameters

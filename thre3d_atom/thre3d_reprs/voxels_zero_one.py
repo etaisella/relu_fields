@@ -1,5 +1,7 @@
 """ manually written sort-of-low-level implementation for voxel-based 3D volumetric representations """
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
+from thre3d_atom.thre3d_reprs.voxels import VoxelGrid
+from thre3d_atom.thre3d_reprs.straightThroughSoftmax import StraightThroughSoftMax
 
 import torch
 from torch import Tensor
@@ -14,6 +16,7 @@ from thre3d_atom.thre3d_reprs.constants import (
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
+HIGH_DENSITY = 1000.0
 
 class VoxelSize(NamedTuple):
     """lengths of a single voxel's edges in the x, y and z dimensions
@@ -42,7 +45,7 @@ class AxisAlignedBoundingBox(NamedTuple):
     z_range: Tuple[float, float]
 
 
-class VoxelGrid(Module):
+class VoxelGrid_ZeroOne(Module):
     def __init__(
         self,
         # grid values:
@@ -61,6 +64,7 @@ class VoxelGrid(Module):
         radiance_transfer_function: Callable[[Tensor, Tensor], Tensor] = None,
         expected_density_scale: float = 1.0,
         tunable: bool = False,
+        zero_one_active: bool = False
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -81,7 +85,7 @@ class VoxelGrid(Module):
         """
         # as usual start with assertions about the inputs:
         assert (
-            len(densities.shape) == 4 and densities.shape[-1] == 1
+            len(densities.shape) == 4 and densities.shape[-1] == 2
         ), f"features should be of shape [W x D x H x 1] as opposed to ({features.shape})"
         assert (
             len(features.shape) == 4
@@ -106,6 +110,9 @@ class VoxelGrid(Module):
         self._tunable = tunable
         # ES addition: adding interpolation mode as a public member
         self.interpolation_mode = "bilinear"
+        self.zero_one_active = zero_one_active
+        self._st_softmax = StraightThroughSoftMax()
+        self._softmax = torch.nn.Softmax(dim=-1)
 
         if tunable:
             self._densities = torch.nn.Parameter(self._densities)
@@ -310,6 +317,14 @@ class VoxelGrid(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
         interpolated_densities = self._density_postactivation(interpolated_densities)
+        interpolated_densities = torch.squeeze(interpolated_densities)
+        if self.zero_one_active:
+            interpolated_densities = self._st_softmax(interpolated_densities)
+        else:
+            interpolated_densities = self._softmax(interpolated_densities)
+        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
+        interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)
+        interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
 
         # interpolate and compute features
         # ADDITION ES: Changed interpolation mode to nearest here
@@ -335,10 +350,31 @@ class VoxelGrid(Module):
         # return a unified tensor containing interpolated features and densities
         return torch.cat([interpolated_features, interpolated_densities], dim=-1)
 
+    def create_voxel_grid_from_z1_voxel_grid(self) -> VoxelGrid:
+        # get regular densities
+        if self.zero_one_active:
+            softmaxed_densities = self._st_softmax(self.densities).detach()
+        else:
+            softmaxed_densities = self._softmax(self.densities).detach()
+        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
+        output_densities = torch.matmul(softmaxed_densities, zero_one_tensor)
+        output_densities = torch.unsqueeze(output_densities, dim=-1)
 
-def scale_voxel_grid_with_required_output_size(
-    voxel_grid: VoxelGrid, output_size: Tuple[int, int, int], mode: str = "trilinear"
-) -> VoxelGrid:
+        # get features
+        output_features = self._features.detach()
+
+        # return regular grid
+        new_voxel_grid = VoxelGrid(
+            densities=output_densities,
+            features=output_features,
+            voxel_size=self.voxel_size,
+            **self.get_config_dict(),
+        )
+        return new_voxel_grid
+
+def scale_zero_one_voxel_grid_with_required_output_size(
+    voxel_grid: VoxelGrid_ZeroOne, output_size: Tuple[int, int, int], mode: str = "trilinear"
+) -> VoxelGrid_ZeroOne:
 
     # extract relevant information from the original input voxel_grid:
     og_unified_feature_tensor = torch.cat(
@@ -367,9 +403,9 @@ def scale_voxel_grid_with_required_output_size(
     )
 
     # create a new voxel_grid by cloning the input voxel_grid and update the newly scaled properties
-    new_voxel_grid = VoxelGrid(
-        densities=new_features[..., -1:],
-        features=new_features[..., :-1],
+    new_voxel_grid = VoxelGrid_ZeroOne(
+        densities=new_features[..., -2:],
+        features=new_features[..., :-2],
         voxel_size=new_voxel_size,
         **voxel_grid.get_config_dict(),
     )
@@ -378,10 +414,10 @@ def scale_voxel_grid_with_required_output_size(
     return new_voxel_grid
 
 
-def create_voxel_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelGrid:
+def create_zero_one_voxel_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelGrid_ZeroOne:
     densities = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_DENSITIES])
     features = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_FEATURES])
-    voxel_grid = VoxelGrid(
+    voxel_grid = VoxelGrid_ZeroOne(
         densities=densities, features=features, **saved_info[THRE3D_REPR][CONFIG_DICT]
     )
     voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])

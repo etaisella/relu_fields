@@ -1,5 +1,6 @@
 """ manually written sort-of-low-level implementation for voxel-based 3D volumetric representations """
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
+from thre3d_atom.thre3d_reprs.straightThroughSoftmax import StraightThroughSoftMax
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation, AxisAlignedBoundingBox
 from thre3d_atom.thre3d_reprs.unet3d import UNet3d
 from thre3d_atom.thre3d_reprs.cnn3d_naive_down import cnn3d_naive_down
@@ -18,16 +19,18 @@ from thre3d_atom.thre3d_reprs.constants import (
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
+HIGH_DENSITY = 1000.0
+
 class VoxelArtGrid_3DCNN(Module):
     def __init__(
         self,
         # grid values:
         high_res_densities: Tensor,
         high_res_features: Tensor,
-        # new grid dims:
-        new_grid_dims: Tuple[int, int, int],
         # grid coordinate-space properties:
         voxel_size: VoxelSize,
+        # new grid dims:
+        new_grid_dims: Tuple[int, int, int] = [32, 32, 32],
         grid_location: Optional[VoxelGridLocation] = VoxelGridLocation(),
         # density activations:
         density_preactivation: Callable[[Tensor], Tensor] = torch.abs,
@@ -40,6 +43,7 @@ class VoxelArtGrid_3DCNN(Module):
         expected_density_scale: float = 1.0,
         tunable: bool = False,
         naive_down: bool = False,
+        zero_one_density: bool = True,
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -84,6 +88,7 @@ class VoxelArtGrid_3DCNN(Module):
         self._voxel_size = voxel_size
         self._expected_density_scale = expected_density_scale
         self._tunable = tunable
+        self._zero_one_density = zero_one_density
 
         # ES addition: adding interpolation mode as a public member
         self.interpolation_mode = "bilinear"
@@ -114,11 +119,19 @@ class VoxelArtGrid_3DCNN(Module):
             (self.hr_depth_y / self.depth_y == 4) and (self.hr_height_z / self.height_z == 4)  
 
         # init 3D CNN
-        grid_channels = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
-        if naive_down:
-            self._cnn3d = cnn3d_naive_down(grid_channels, small=small_mode)
+        grid_channels_high_res = self._high_res_densities.shape[-1] + self._high_res_features.shape[-1]
+
+        # if we are using zero one density, we have two density channels, one for probability of "zero" density
+        # and the other for the probability of "one" density
+        if self._zero_one_density:
+            grid_channels_low_res = grid_channels_high_res + 1
         else:
-            self._cnn3d = UNet3d(grid_channels, small=small_mode)
+            grid_channels_low_res = grid_channels_high_res
+
+        if naive_down:
+            self._cnn3d = cnn3d_naive_down(grid_channels_high_res, small=small_mode)
+        else:
+            self._cnn3d = UNet3d(grid_channels_high_res, grid_channels_low_res, small=small_mode)
         
         self._cnn3d = self._cnn3d.to(self._device)
 
@@ -128,6 +141,9 @@ class VoxelArtGrid_3DCNN(Module):
 
         # setup the bounding box planes
         self._aabb = self._setup_bounding_box_planes()
+
+        # setup straight through softmax
+        self._st_softmax = StraightThroughSoftMax()
 
     @property
     def downsample_weights(self) -> Tensor:
@@ -274,9 +290,13 @@ class VoxelArtGrid_3DCNN(Module):
         low_res_grid = self._cnn3d(torch.unsqueeze(self._high_res_grid, 0))
         low_res_grid = torch.squeeze(low_res_grid)
         low_res_grid = torch.permute(low_res_grid, (1, 2, 3, 0))
-        low_res_densities = torch.unsqueeze(low_res_grid[..., 0], -1)
-        low_res_features = low_res_grid[..., 1:]
-        low_res_features[...,:]
+
+        if self._zero_one_density:
+            low_res_densities = low_res_grid[..., :2]
+            low_res_features = low_res_grid[..., 2:]
+        else:
+            low_res_densities = torch.unsqueeze(low_res_grid[..., 0], -1)
+            low_res_features = low_res_grid[..., 1:]
 
         # interpolate and compute densities
         # Note the pre- and post-activations :)
@@ -300,6 +320,12 @@ class VoxelArtGrid_3DCNN(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
         interpolated_densities = self._density_postactivation(interpolated_densities)
+        if self._zero_one_density:
+            interpolated_densities = torch.squeeze(interpolated_densities)
+            interpolated_densities = self._st_softmax(interpolated_densities)
+            zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
+            interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)
+            interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
 
         # interpolate and compute features
         # ADDITION ES: Changed interpolation mode to nearest here

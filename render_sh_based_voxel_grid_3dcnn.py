@@ -5,18 +5,15 @@ import imageio
 import torch
 
 from thre3d_atom.modules.volumetric_model import (
-    create_volumetric_model_from_saved_model,
+    create_volumetric_model_from_saved_model_va_3dcnn,
 )
-from thre3d_atom.thre3d_reprs.voxels import create_voxel_grid_from_saved_info_dict
 from thre3d_atom.utils.constants import HEMISPHERICAL_RADIUS, CAMERA_INTRINSICS
 from thre3d_atom.utils.imaging_utils import (
     get_thre360_animation_poses,
     get_thre360_spiral_animation_poses,
 )
 from thre3d_atom.visualizations.animations import (
-    render_camera_path_for_volumetric_model,
-    render_camera_path_for_volumetric_model_3_coeff_modes,
-    render_camera_path_for_volumetric_model_3_coeff_modes_gray,
+    render_camera_path_for_volumetric_model
 )
 from easydict import EasyDict
 
@@ -32,6 +29,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Required arguments:
 @click.option("-i", "--model_path", type=click.Path(file_okay=True, dir_okay=False),
               required=True, help="path to the trained (reconstructed) model")
+@click.option("-h", "--high_res_model_path", type=click.Path(file_okay=True, dir_okay=False),
+              required=True, help="path to the trained High Resolution model")
 @click.option("-o", "--output_path", type=click.Path(file_okay=False, dir_okay=True),
               required=True, help="path for saving rendered output")
 
@@ -75,17 +74,17 @@ def main(**kwargs) -> None:
 
     # parse os-checked path-strings into Pathlike Paths :)
     model_path = Path(config.model_path)
+    high_res_model_path = Path(config.high_res_model_path)
     output_path = Path(config.output_path)
 
     # create the output path if it doesn't exist
     output_path.mkdir(exist_ok=True, parents=True)
 
     # load volumetric_model from the model_path
-    vol_mod, extra_info = create_volumetric_model_from_saved_model(
+    vol_mod, extra_info = create_volumetric_model_from_saved_model_va_3dcnn(
         model_path=model_path,
-        thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
+        high_res_model_path=high_res_model_path,
         device=device,
-        #num_clusters=config.clusters,
         num_clusters=config.clusters,
     )
 
@@ -121,11 +120,9 @@ def main(**kwargs) -> None:
         )
 
     if config.gray_mode:
-        print("Rendering in gray mode mode")
-        render_function = render_camera_path_for_volumetric_model_3_coeff_modes_gray
+        print(f"Unsupported Render mode: gray_mode")
     elif config.three_coeff_mode:
-        print("Rendering in three coeff mode")
-        render_function = render_camera_path_for_volumetric_model_3_coeff_modes
+        print(f"Unsupported Render mode: three_coeff_mode")
     else:
         print("Rendering normal mode")
         render_function = render_camera_path_for_volumetric_model

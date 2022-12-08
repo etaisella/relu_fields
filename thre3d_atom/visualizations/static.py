@@ -25,6 +25,7 @@ from thre3d_atom.utils.imaging_utils import (
 )
 from thre3d_atom.utils.logging import log
 
+import wandb
 
 def visualize_camera_rays(
     dataset: PosedImagesDataset,
@@ -154,6 +155,8 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
         specular_feedback_image,
     )
 
+    wandb.log({"specular img": wandb.Image(specular_feedback_image)}, step=global_step)
+
     # ES Addition: Render Voxelized Version
     vol_mod.thre3d_repr.interpolation_mode = "nearest"
     nn_specular_rendered_output = vol_mod.render(
@@ -175,6 +178,8 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
         nn_specular_feedback_image,
     )
 
+    wandb.log({"voxelized img": wandb.Image(nn_specular_feedback_image)}, step=global_step)
+
     if log_diffuse_rendered_version:
         diffuse_rendered_output = vol_mod.render(
             camera_pose=render_feedback_pose,
@@ -193,3 +198,5 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
             feedback_logs_dir / f"diffuse_{global_step}.png",
             diffuse_feedback_image,
         )
+    
+    wandb.log({"diffuse img": wandb.Image(diffuse_feedback_image)}, step=global_step)
