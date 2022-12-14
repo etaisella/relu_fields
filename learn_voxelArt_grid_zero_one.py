@@ -15,13 +15,14 @@ from thre3d_atom.thre3d_reprs.renderers import (
     render_sh_voxel_grid,
     SHVoxGridRenderConfig,
 )
-from thre3d_atom.thre3d_reprs.voxels_zero_one import VoxelGrid_ZeroOne, VoxelSize, VoxelGridLocation
+from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid, VoxelSize, VoxelGridLocation
 from thre3d_atom.utils.constants import NUM_COLOUR_CHANNELS
 from thre3d_atom.utils.logging import log
 from thre3d_atom.utils.misc import log_config_to_disk
 
 import wandb
 from datetime import datetime
+from get_palette import *
 
 # Age-old custom option for fast training :)
 cudnn.benchmark = True
@@ -88,7 +89,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="number of samples taken per ray during training", show_default=True)
 @click.option("--num_stages", type=click.INT, required=False, default=4,
               help="number of progressive growing stages used in training", show_default=True)
-@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=800,
+@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1000,
               help="number of training iterations performed per stage", show_default=True)
 @click.option("--scale_factor", type=click.FLOAT, required=False, default=2.0,
               help="factor by which the grid is up-scaled after each stage", show_default=True)
@@ -130,8 +131,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Etai Additions:
 @click.option("--rtmv", type=click.BOOL, required=False, default=False,
               help="a flag ES added to change the way we load DATA to use the RTMV dataset", show_default=True)
-@click.option("--activate_zero_one_iter", type=click.INT, required=False, default=-1,
-              help="The iteration in which to activate zero one density, -1 = never", show_default=True)
+@click.option("--temperature_gamma", type=click.FLOAT, required=False, default=1.65,
+              help="the gamma by which we increase temperature", show_default=True)
+@click.option("--raise_temperature_iter", type=click.INT, required=False, default=100,
+              help="iteration in which to raise temperature", show_default=True)
+@click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
+              help="a flag to determine whether to quantize the voxel colors", show_default=True)
+@click.option("--use_pure_argmax", type=click.BOOL, required=False, default=False,
+              help="a flag to determine whether to use pure argmax instead of heated softmax", show_default=True)
+@click.option("--num_colors", type=click.INT, required=False, default=5,
+              help="number of colors in palette", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -163,6 +172,19 @@ def main(**kwargs) -> None:
     for mode in ("train", "test")
     )
 
+    # get palette here
+    print("Calculating Palette - be patient!")
+    concat_image = concatenate_images(data_path/"train")
+    palette = get_palette(concat_image, config.num_colors)
+    wandb.log({"palette": wandb.Image(torch.unsqueeze(torch.permute(palette, (1, 0)), dim=-2))}, step=0)
+
+    # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
+    C0 = 0.28209479177387814
+    EPSILON = 1e-5
+    palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
+    palette = torch.logit(palette)
+    palette = palette / C0
+
     # Choose the proper activations dict based on the requested mode:
     if config.use_relu_field:
         vox_grid_density_activations_dict = {
@@ -190,18 +212,26 @@ def main(**kwargs) -> None:
     # fmt: off
     densities = torch.empty((*config.grid_dims, 2), dtype=torch.float32, device=device)
     torch.nn.init.uniform_(densities, -1.0, 1.0)
-    num_sh_features = NUM_COLOUR_CHANNELS * ((config.sh_degree + 1) ** 2)
-    features = torch.empty((*config.grid_dims, num_sh_features), dtype=torch.float32, device=device)
+    if config.quantize_colors:
+        features = torch.empty((*config.grid_dims, config.num_colors), dtype=torch.float32, device=device)
+    else:
+        num_sh_features = NUM_COLOUR_CHANNELS * ((config.sh_degree + 1) ** 2)
+        features = torch.empty((*config.grid_dims, num_sh_features), dtype=torch.float32, device=device)
+
     torch.nn.init.uniform_(features, -1.0, 1.0)
     voxel_size = VoxelSize(*[dim_size / grid_dim for dim_size, grid_dim
                              in zip(config.grid_world_size, config.grid_dims)])
-    voxel_grid = VoxelGrid_ZeroOne(
+    voxel_grid = VoxelArtGrid(
         densities=densities,
         features=features,
         voxel_size=voxel_size,
         grid_location=VoxelGridLocation(*config.grid_location),
         **vox_grid_density_activations_dict,
         tunable=True,
+        palette=palette,
+        quant_colors=config.quantize_colors,
+        num_colors=config.num_colors,
+        use_pure_argmax=config.use_pure_argmax
     )
     # fmt: on
 
@@ -242,8 +272,10 @@ def main(**kwargs) -> None:
         num_workers=config.num_workers,
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
-        direct_zero_one_mode=True,
-        activate_zero_one_iter=config.activate_zero_one_iter
+        direct_zero_one_mode=True, # this mode tells it that is a voxelArt grid with no cnn
+        temperature_gamma=config.temperature_gamma,
+        raise_temperature_iter=config.raise_temperature_iter,
+        quantize_colors=True
     )
 
 

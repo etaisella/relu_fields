@@ -33,7 +33,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=True, help="path to the trained High Resolution model")
 @click.option("-o", "--output_path", type=click.Path(file_okay=False, dir_okay=True),
               required=True, help="path for saving rendered output")
-
+@click.option("-d", "--data_path", type=click.Path(file_okay=False, dir_okay=True),
+              required=True, help="path to the input dataset")
+              
 # Non-required Render configuration options:
 @click.option("--overridden_num_samples_per_ray", type=click.IntRange(min=1), default=512,
               required=False, help="overridden (increased) num_samples_per_ray for beautiful renders :)")

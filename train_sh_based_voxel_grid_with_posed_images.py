@@ -2,6 +2,8 @@ from pathlib import Path
 
 import click
 import torch
+import wandb
+from datetime import datetime
 from easydict import EasyDict
 from torch.backends import cudnn
 
@@ -133,6 +135,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def main(**kwargs) -> None:
     # load the requested configuration for the training
     config = EasyDict(kwargs)
+    wandb.init(project='VoxelArtReluFields', entity="etaisella",
+                   config=dict(config), name="test " + str(datetime.now()), 
+                   id=wandb.util.generate_id())
+
 
     # parse os-checked path-strings into Pathlike Paths :)
     data_path = Path(config.data_path)

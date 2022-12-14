@@ -8,7 +8,7 @@ from torch.backends import cudnn
 from thre3d_atom.data.datasets import PosedImagesDataset
 
 from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation
-from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
+from relu_fields.thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 
 from thre3d_atom.modules.volumetric_model import VolumetricModel
 

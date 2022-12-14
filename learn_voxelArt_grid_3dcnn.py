@@ -4,6 +4,8 @@ from PIL import Image as im
 import click
 import imageio
 import torch
+import wandb
+from datetime import datetime
 from torch.backends import cudnn
 
 import gc
@@ -44,6 +46,8 @@ from thre3d_atom.thre3d_reprs.renderers import (
 from thre3d_atom.utils.logging import log
 from thre3d_atom.utils.misc import log_config_to_disk
 from easydict import EasyDict
+
+from get_palette import *
 
 # Age-old custom option for fast training :)
 cudnn.benchmark = True
@@ -91,9 +95,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="number of parallel rays processed on the GPU for accelerated rendering", show_default=True)
 @click.option("--ray_batch_size", type=click.INT, required=False, default=16384 / 4,
               help="number of randomly sampled rays used per training iteration", show_default=True)
-@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1800,
+@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1500,
               help="number of training iterations performed per stage", show_default=True)
-@click.option("--learning_rate", type=click.FLOAT, required=False, default=0.001,
+@click.option("--learning_rate", type=click.FLOAT, required=False, default=0.0001,
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
 @click.option("--lr_decay_steps_per_stage", type=click.INT, required=False, default=500,
               help="number of iterations after which lr is exponentially decayed per stage", show_default=True)
@@ -163,18 +167,51 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=False, help="if this is True the input of the 3D unet is constant noise")
 @click.option("--zero_one_density", type=click.BOOL, default=True,
               required=False, help="whether to use zero one density :( ")
+@click.option("--zero_one_density_iter", type=click.INT, default=-1,
+              required=False, help="Iter in which to start using zero one density")
 @click.option("--new_grid_dims", type=click.INT, nargs=3, required=False, default=(64, 64, 64),
               help="dimensions (#voxels) of the new grid along x, y and z axes", show_default=True)
+@click.option("--temperature_gamma", type=click.FLOAT, required=False, default=8.0,
+              help="the gamma by which we increase temperature", show_default=True)
+@click.option("--raise_temperature_iter", type=click.INT, required=False, default=200,
+              help="iteration in which to raise temperature", show_default=True)
+@click.option("--start_raise_temperature_iter", type=click.INT, required=False, default=-1,
+              help="iteration in which to start raising temperature", show_default=True)
+@click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
+              help="a flag to determine whether to quantize the voxel colors", show_default=True)
+@click.option("--num_colors", type=click.INT, required=False, default=5,
+              help="number of colors in palette", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
 def main(**kwargs) -> None:
     # load the requested configuration for the training
     config = EasyDict(kwargs)
+    wandb.init(project='VoxelArtReluFields', entity="etaisella",
+                   config=dict(config), name="test " + str(datetime.now()), 
+                   id=wandb.util.generate_id())
 
 # -------------------------------------------------------------------------------------
 #  Learning Voxel Art Grid                                                            |
 # -------------------------------------------------------------------------------------
+
+    if config.quantize_colors:
+        # get palette here
+        print("Calculating Palette - be patient!")
+        data_path = Path(config.data_path)
+        concat_image = concatenate_images(data_path/"train")
+        palette = get_palette(concat_image, config.num_colors).to(device)
+        wandb.log({"palette": wandb.Image(torch.unsqueeze(torch.permute(palette, (1, 0)), dim=-2))}, step=0)
+
+        # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
+        C0 = 0.28209479177387814
+        EPSILON = 1e-5
+        palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
+        palette = torch.logit(palette)
+        palette = palette / C0
+    
+    else:
+        palette = None
 
     # parse os-checked path-strings into Pathlike Paths :)
     highres_model_path = Path(config.high_res_model_path)
@@ -225,7 +262,10 @@ def main(**kwargs) -> None:
         **vox_grid_density_activations_dict,
         tunable=True,
         naive_down=config.naive_downsample_mode,
-        zero_one_density=config.zero_one_density
+        zero_one_density=config.zero_one_density,
+        quant_colors=config.quantize_colors,
+        num_colors=config.num_colors,
+        palette=palette
     )
 
     # 2. Set Dataset Parameters
@@ -288,12 +328,16 @@ def main(**kwargs) -> None:
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
         voxelArt_mode=True,
+        zero_one_density_iter=config.zero_one_density_iter,
+        temperature_gamma=config.temperature_gamma,
+        raise_temperature_iter=config.raise_temperature_iter,
+        start_raise_temperature_iter=config.start_raise_temperature_iter,
     )
 
 # -------------------------------------------------------------------------------------
 #  Rendering Output Video                                                             |
 # -------------------------------------------------------------------------------------
-
+    '''
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]
 
@@ -335,6 +379,7 @@ def main(**kwargs) -> None:
         animation_frames,
         fps=config.fps,
     )
+    '''
 
 
 if __name__ == "__main__":

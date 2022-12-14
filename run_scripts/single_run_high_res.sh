@@ -29,7 +29,6 @@ train_and_render() {
 	--train_num_samples_per_ray=$6 \
 	--sh_degree=$8
 
-	
 	# Render Video
 	echo "Starting Rendering..."
 	python render_sh_based_voxel_grid.py \
@@ -47,7 +46,7 @@ learning_rate=0.03
 num_stages=4
 train_num_samples_per_ray=512
 gird_dim=128
-sh_degree=2
+sh_degree=0
 clusters=0
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \

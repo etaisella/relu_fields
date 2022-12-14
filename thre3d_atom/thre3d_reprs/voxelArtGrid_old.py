@@ -1,12 +1,12 @@
 """ manually written sort-of-low-level implementation for voxel-based 3D volumetric representations """
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
-from thre3d_atom.thre3d_reprs.voxels import VoxelGrid
-from thre3d_atom.thre3d_reprs.straightThroughSoftmax import StraightThroughSoftMax
+from thre3d_atom.thre3d_reprs.voxels import VoxelSize, VoxelGridLocation, AxisAlignedBoundingBox
 
 import torch
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.functional import grid_sample, interpolate
+from torch.nn.functional import grid_sample, normalize, interpolate
+
 from thre3d_atom.thre3d_reprs.constants import (
     THRE3D_REPR,
     STATE_DICT,
@@ -16,41 +16,55 @@ from thre3d_atom.thre3d_reprs.constants import (
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
-HIGH_DENSITY = 1000.0
+def split_to_subblocks(x: Tensor, block_dims: Tuple[int, int, int]) -> torch.Tensor:
+  # 1. Some asserts:
+  assert(x.dim() == 4), f"Input tensor must have 4 dimensions, {x.size} given"
+  assert(block_dims[0] <= x.shape[0]), f"Block dims must be smaller than input dims"
+  assert(block_dims[1] <= x.shape[1]), f"Block dims must be smaller than input dims"
+  assert(block_dims[2] <= x.shape[2]), f"Block dims must be smaller than input dims"
 
-class VoxelSize(NamedTuple):
-    """lengths of a single voxel's edges in the x, y and z dimensions
-    allows for the possibility of anisotropic voxels"""
+  # 2. Set Unfold params
+  unfold = torch.nn.Unfold(kernel_size=(block_dims[1], block_dims[2]), 
+                           stride=(block_dims[1], block_dims[2]), padding=0)
+  
+  # 3. Calculate Dims
+  num_blocks_height = int(x.shape[0] / block_dims[0])
+  num_blocks_width = int(x.shape[1] / block_dims[1])
+  num_blocks_depth = int(x.shape[2] / block_dims[2])
+  block_height = block_dims[0]
+  data_dim = x.shape[-1]
+  total_block_size = block_dims[0] * block_dims[1] *block_dims[2]
 
-    x_size: float = 1.0
-    y_size: float = 1.0
-    z_size: float = 1.0
+  # 4. Initialize output / input
+  xp = torch.permute(x, (-1, *range(3)))
+  output = torch.zeros((data_dim, num_blocks_height, num_blocks_width, num_blocks_depth, total_block_size), 
+                       device=x.device).double()
 
+  # 5. Arrange in Blocks
+  for h_block in range(num_blocks_height):
+    h_offset = h_block * block_height
+    slices = []
+    for h in range(block_height):
+      # unfold requires some reformatting
+      grid_slice = torch.reshape(xp[:, h_offset + h], (xp.shape[0], 1, xp.shape[-2], xp.shape[-1])).double()
+      output_slice = torch.transpose(unfold(grid_slice), -2, -1)
+      slices.append(output_slice)
+    output_block_layer = torch.cat(tuple(slices), dim=-1)
+    output_block_layer = torch.reshape(output_block_layer, 
+                                       (data_dim, num_blocks_width, num_blocks_depth, total_block_size))
+    output[:,h_block] = output_block_layer[:]
+  
+  # 6. Arrange output
+  output = torch.permute(output, (1,2,3,4,0))
+  return output
 
-class VoxelGridLocation(NamedTuple):
-    """indicates where the Voxel-Grid is located in World Coordinate System
-    i.e. indicates where the centre of the grid is located in the World
-    The Grid is always assumed to be axis aligned"""
-
-    x_coord: float = 0.0
-    y_coord: float = 0.0
-    z_coord: float = 0.0
-
-
-class AxisAlignedBoundingBox(NamedTuple):
-    """defines an axis-aligned voxel grid's spatial extent"""
-
-    x_range: Tuple[float, float]
-    y_range: Tuple[float, float]
-    z_range: Tuple[float, float]
-
-
-class VoxelGrid_ZeroOne(Module):
+class VoxelArtGrid(Module):
     def __init__(
         self,
         # grid values:
-        densities: Tensor,
-        features: Tensor,
+        high_res_densities: Tensor,
+        high_res_features: Tensor,
+        downsample_weights: Tensor,
         # grid coordinate-space properties:
         voxel_size: VoxelSize,
         grid_location: Optional[VoxelGridLocation] = VoxelGridLocation(),
@@ -64,7 +78,6 @@ class VoxelGrid_ZeroOne(Module):
         radiance_transfer_function: Callable[[Tensor, Tensor], Tensor] = None,
         expected_density_scale: float = 1.0,
         tunable: bool = False,
-        zero_one_active: bool = False
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -85,20 +98,22 @@ class VoxelGrid_ZeroOne(Module):
         """
         # as usual start with assertions about the inputs:
         assert (
-            len(densities.shape) == 4 and densities.shape[-1] == 2
-        ), f"features should be of shape [W x D x H x 1] as opposed to ({features.shape})"
+            len(downsample_weights.shape) == 5 and downsample_weights.shape[-1] == 1
+        ), f"weights should be of shape [W x D x H x Total Block Size x 1] as opposed to ({downsample_weights.shape})"
         assert (
-            len(features.shape) == 4
-        ), f"features should be of shape [W x D x H x F] as opposed to ({features.shape})"
+            len(high_res_densities.shape) == 4 and high_res_densities.shape[-1] == 1
+        ), f"high res densities should be of shape [W x D x H x 1] as opposed to ({high_res_densities.shape})"
         assert (
-            densities.device == features.device
-        ), f"densities and features are not on the same device :("
+            len(high_res_features.shape) == 4
+        ), f"high res features should be of shape [W x D x H x F] as opposed to ({high_res_features.shape})"
+        assert (
+            high_res_densities.device == high_res_features.device == downsample_weights.device
+        ), f"densities, features and weights are not on the same device :("
 
         super().__init__()
 
         # initialize the state of the object
-        self._densities = densities
-        self._features = features
+        self._downsample_weights = downsample_weights
         self._density_preactivation = density_preactivation
         self._density_postactivation = density_postactivation
         self._feature_preactivation = feature_preactivation
@@ -110,54 +125,57 @@ class VoxelGrid_ZeroOne(Module):
         self._tunable = tunable
         # ES addition: adding interpolation mode as a public member
         self.interpolation_mode = "bilinear"
-        self.zero_one_active = zero_one_active
-        self._st_softmax = StraightThroughSoftMax()
-        self._softmax = torch.nn.Softmax(dim=-1)
 
         if tunable:
-            self._densities = torch.nn.Parameter(self._densities)
-            self._features = torch.nn.Parameter(self._features)
+            self._downsample_weights = torch.nn.Parameter(self._downsample_weights)
 
         # either densities or features can be used:
-        self._device = features.device
+        self._device = downsample_weights.device
 
         # note the x, y and z conventions for the width (+ve right), depth (+ve inwards) and height (+ve up)
         self.width_x, self.depth_y, self.height_z = (
-            self._features.shape[0],
-            self._features.shape[1],
-            self._features.shape[2],
+            self._downsample_weights.shape[0],
+            self._downsample_weights.shape[1],
+            self._downsample_weights.shape[2],
         )
+
+        self.hr_width_x, self.hr_depth_y, self.hr_height_z = (
+            high_res_densities.shape[0],
+            high_res_densities.shape[1],
+            high_res_densities.shape[2],
+        )
+
+        # Make sure high res dimensions align with new dimensions
+        assert (
+            self.hr_width_x % self.width_x == 0
+        ), f"High resolution x - {self.hr_width_x} is not divisible by grid x - {self.width_x}"
+        assert (
+            self.hr_depth_y % self.depth_y == 0
+        ), f"High resolution y - {self.hr_depth_y} is not divisible by grid y - {self.depth_y}"
+        assert (
+            self.hr_height_z % self.height_z == 0
+        ), f"High resolution z - {self.hr_height_z} is not divisible by grid z - {self.height_z}"
+
+        # calculate block sizes
+        self._block_x = int(self.hr_width_x / self.width_x)
+        self._block_y = int(self.hr_depth_y / self.depth_y)
+        self._block_z = int(self.hr_height_z / self.height_z)
+        self._total_block_size = self._block_x * self._block_y * self._block_z
+
+        # prepare high res features and densities
+        self._high_res_densities = split_to_subblocks(high_res_densities, (self._block_x, self._block_y, self._block_z))
+        self._high_res_densities.requires_grad = False
+        self._high_res_features = split_to_subblocks(high_res_features, (self._block_x, self._block_y, self._block_z))
+        self._high_res_features.requires_grad = False
 
         # setup the bounding box planes
         self._aabb = self._setup_bounding_box_planes()
 
-    @property
-    def densities(self) -> Tensor:
-        return self._densities
+        self._sigmoid = torch.nn.Sigmoid()
 
     @property
-    def features(self) -> Tensor:
-        return self._features
-
-    @features.setter
-    def features(self, features: Tensor) -> None:
-        assert (
-            features.shape == self._features.shape
-        ), f"new features don't match original feature tensor's dimensions"
-        if self._tunable and not isinstance(features, torch.nn.Parameter):
-            self._features = torch.nn.Parameter(features)
-        else:
-            self._features = features
-
-    @densities.setter
-    def densities(self, densities: Tensor) -> None:
-        assert (
-            densities.shape == self._densities.shape
-        ), f"new densities don't match original densities tensor's dimensions"
-        if self._tunable and not isinstance(densities, torch.nn.Parameter):
-            self._densities = torch.nn.Parameter(densities)
-        else:
-            self._densities = densities
+    def downsample_weights(self) -> Tensor:
+        return self._downsample_weights
 
     @property
     def aabb(self) -> AxisAlignedBoundingBox:
@@ -295,18 +313,15 @@ class VoxelGrid_ZeroOne(Module):
         # obtain the range-normalized points for interpolation
         normalized_points = self._normalize_points(points)
 
-        # interpolate and compute densities
-        # Note the pre- and post-activations :)
-        preactivated_densities = self._density_preactivation(
-            self._densities * self._expected_density_scale
-        )  # note the use of the expected density scale
-        # ADDITION ES: Changed interpolation mode to nearest here
-        interpolated_densities = (
+        # interpolate and compute weights
+        # no preactivation needed here, atleast not yet
+        preactivated_weights = torch.squeeze(self._downsample_weights)
+        interpolated_weights = (
             grid_sample(
                 # note the weird z, y, x convention of PyTorch's grid_sample.
                 # reference ->
                 # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
-                preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
+                preactivated_weights[None, ...].permute(0, 4, 3, 2, 1),
                 normalized_points[None, None, None, ...],
                 mode=self.interpolation_mode,
                 align_corners=False,
@@ -316,65 +331,72 @@ class VoxelGrid_ZeroOne(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_densities = self._density_postactivation(interpolated_densities)
-        interpolated_densities = torch.squeeze(interpolated_densities)
-        if self.zero_one_active:
-            interpolated_densities = self._st_softmax(interpolated_densities)
-        else:
-            interpolated_densities = self._softmax(interpolated_densities)
-        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
-        interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)
-        interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
+        interpolated_weights = self._density_postactivation(interpolated_weights)
+        
+        # interpolate and compute densities
+        # Note the pre- and post-activations :)
+        preactivated_densities = self._density_preactivation(
+            self._high_res_densities * self._expected_density_scale
+        )  # note the use of the expected density scale
+        # ES Addition: change to 4D format to support torch grid sample
+        with torch.no_grad():
+            preactivated_densities = torch.squeeze(preactivated_densities).float()
+            interpolated_densities = (
+                grid_sample(
+                    # note the weird z, y, x convention of PyTorch's grid_sample.
+                    # reference ->
+                    # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
+                    preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
+                    normalized_points[None, None, None, ...],
+                    mode=self.interpolation_mode,
+                    align_corners=False,
+                )
+                .permute(0, 2, 3, 4, 1)
+                .squeeze()
+            )[
+                ..., None
+            ]  # note this None is required because of the squeeze operation :sweat_smile:
+            #interpolated_densities = self._density_postactivation(interpolated_densities)
+
+        # ES Addition: Multiply by weights to get the final densities:
+        weighted_densities = torch.sum(interpolated_densities * interpolated_weights, dim=-2)
+        weighted_densities = self._sigmoid(weighted_densities)*60.0
 
         # interpolate and compute features
-        # ADDITION ES: Changed interpolation mode to nearest here
-        preactivated_features = self._feature_preactivation(self._features)
-        interpolated_features = (
-            grid_sample(
-                preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
-                normalized_points[None, None, None, ...],
-                mode=self.interpolation_mode,
-                align_corners=False,
+        # ES Addition: change to 4D format to support torch grid sample
+        with torch.no_grad():
+            preactivated_features = self._feature_preactivation(self._high_res_features).float()
+            preactivated_features = torch.reshape(preactivated_features, (*preactivated_features.shape[0:-2], -1))
+            interpolated_features = (
+                grid_sample(
+                    preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
+                    normalized_points[None, None, None, ...],
+                    mode=self.interpolation_mode,
+                    align_corners=False,
+                )
+                .permute(0, 2, 3, 4, 1)
+                .squeeze()
             )
-            .permute(0, 2, 3, 4, 1)
-            .squeeze()
-        )
-        interpolated_features = self._feature_postactivation(interpolated_features)
+            interpolated_features = self._feature_postactivation(interpolated_features)
+            interpolated_features = torch.reshape(interpolated_features, (-1, *self._high_res_features.shape[-2:]))
+
+        # ES Addition: Multiply by weights to get the final densities:
+        interpolated_weights = normalize(interpolated_weights, p=1, dim=-2)
+        weighted_features = torch.sum(interpolated_features * interpolated_weights, dim=-2)
 
         # apply the radiance transfer function if it is not None and if view-directions are available
         if self._radiance_transfer_function is not None and viewdirs is not None:
-            interpolated_features = self._radiance_transfer_function(
-                interpolated_features, viewdirs
+            weighted_features = self._radiance_transfer_function(
+                weighted_features, viewdirs
             )
 
         # return a unified tensor containing interpolated features and densities
-        return torch.cat([interpolated_features, interpolated_densities], dim=-1)
+        return torch.cat([weighted_features, weighted_densities], dim=-1)
 
-    def create_voxel_grid_from_z1_voxel_grid(self) -> VoxelGrid:
-        # get regular densities
-        if self.zero_one_active:
-            softmaxed_densities = self._st_softmax(self.densities).detach()
-        else:
-            softmaxed_densities = self._softmax(self.densities).detach()
-        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
-        output_densities = torch.matmul(softmaxed_densities, zero_one_tensor)
-        output_densities = torch.unsqueeze(output_densities, dim=-1)
-
-        # get features
-        output_features = self._features.detach()
-
-        # return regular grid
-        new_voxel_grid = VoxelGrid(
-            densities=output_densities,
-            features=output_features,
-            voxel_size=self.voxel_size,
-            **self.get_config_dict(),
-        )
-        return new_voxel_grid
-
-def scale_zero_one_voxel_grid_with_required_output_size(
-    voxel_grid: VoxelGrid_ZeroOne, output_size: Tuple[int, int, int], mode: str = "trilinear"
-) -> VoxelGrid_ZeroOne:
+'''
+def scale_voxel_grid_with_required_output_size(
+    voxel_grid: VoxelGrid, output_size: Tuple[int, int, int], mode: str = "trilinear"
+) -> VoxelGrid:
 
     # extract relevant information from the original input voxel_grid:
     og_unified_feature_tensor = torch.cat(
@@ -403,9 +425,9 @@ def scale_zero_one_voxel_grid_with_required_output_size(
     )
 
     # create a new voxel_grid by cloning the input voxel_grid and update the newly scaled properties
-    new_voxel_grid = VoxelGrid_ZeroOne(
-        densities=new_features[..., -2:],
-        features=new_features[..., :-2],
+    new_voxel_grid = VoxelGrid(
+        densities=new_features[..., -1:],
+        features=new_features[..., :-1],
         voxel_size=new_voxel_size,
         **voxel_grid.get_config_dict(),
     )
@@ -414,11 +436,12 @@ def scale_zero_one_voxel_grid_with_required_output_size(
     return new_voxel_grid
 
 
-def create_zero_one_voxel_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelGrid_ZeroOne:
+def create_voxel_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelGrid:
     densities = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_DENSITIES])
     features = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_FEATURES])
-    voxel_grid = VoxelGrid_ZeroOne(
+    voxel_grid = VoxelGrid(
         densities=densities, features=features, **saved_info[THRE3D_REPR][CONFIG_DICT]
     )
     voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])
     return voxel_grid
+'''

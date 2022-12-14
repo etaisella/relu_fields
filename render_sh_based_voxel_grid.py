@@ -85,7 +85,6 @@ def main(**kwargs) -> None:
         model_path=model_path,
         thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
         device=device,
-        #num_clusters=config.clusters,
         num_clusters=config.clusters,
     )
 

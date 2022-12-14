@@ -24,7 +24,7 @@ train_and_render() {
 	--grid_dims=${7} ${7} ${7} \
 	--learning_rate=$4 \
 	--num_stages=$5 \
-	--activate_zero_one_iter=1800
+	--activate_zero_one_iter=-1
 }
 
 # STARTING RUN:

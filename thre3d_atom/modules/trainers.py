@@ -29,11 +29,11 @@ from thre3d_atom.thre3d_reprs.voxels import (
     VoxelGrid,
     scale_voxel_grid_with_required_output_size,
 )
-from thre3d_atom.thre3d_reprs.voxels_zero_one import (
-    VoxelGrid_ZeroOne,
+from thre3d_atom.thre3d_reprs.voxelArtGrid import (
+    VoxelArtGrid,
     scale_zero_one_voxel_grid_with_required_output_size,
 )
-from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid
+from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
 from thre3d_atom.utils.constants import (
     CAMERA_BOUNDS,
@@ -51,9 +51,10 @@ from thre3d_atom.visualizations.static import (
     visualize_sh_vox_grid_vol_mod_rendered_feedback,
 )
 
-
+import torchvision.transforms as T
 # TrainProcedure = Callable[[VolumetricModel, Dataset, ...], VolumetricModel]
 
+INIT_TOTAL_LOSS = 9999.0
 
 def train_sh_vox_grid_vol_mod_with_posed_images(
     vol_mod: VolumetricModel,
@@ -90,7 +91,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     fast_debug_mode: bool = False,
     voxelArt_mode: bool = False,
     direct_zero_one_mode: bool = False,
-    activate_zero_one_iter: int = -1
+    quantize_colors: bool=False,
+    temperature_gamma: float=1.15,
+    raise_temperature_iter: int=200,
+    zero_one_density_iter=-1,
+    start_raise_temperature_iter=-1
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -134,6 +139,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     assert (
         vol_mod.render_procedure == render_sh_voxel_grid
     ), f"sorry, non SH-based VoxelGrids cannot be used with this TrainProcedure"
+
+    best_total_loss = INIT_TOTAL_LOSS
 
     # fix the sizes of the feature grids at different stages
     stagewise_voxel_grid_sizes = compute_thre3d_grid_sizes(
@@ -301,19 +308,15 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # please check the `data.datasets` module
             images, poses = next(infinite_train_dl)
 
-            # ES Addition: Printing GPU metrics:
-            #GPUtil.showUtilization()
-
             # cast rays for all the loaded images:
             rays_list = []
             for pose in poses:
-                casted_rays = flatten_rays(
-                    cast_rays(
+                unflattened_rays = cast_rays(
                         current_stage_train_dataset.camera_intrinsics,
                         CameraPose(rotation=pose[:, :3], translation=pose[:, 3:]),
                         device=vol_mod.device,
                     )
-                )
+                casted_rays = flatten_rays(unflattened_rays)
                 rays_list.append(casted_rays)
             rays = collate_rays(rays_list)
 
@@ -373,10 +376,16 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             time_spent_actually_training += time.perf_counter() - last_time
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
             
-            # ES Addition: activate zero one density at a certain step:
-            if global_step == activate_zero_one_iter:
+            # ES Addition: activate pure argmax at a certain step:
+            last_step = num_stages * num_iterations_per_stage - 1
+            if global_step == last_step:
                 print("ACTIVATING ZERO ONE DENSITY")
-                vol_mod.thre3d_repr.zero_one_active = True
+                vol_mod.thre3d_repr.use_pure_argmax = True
+            
+            # ES Addition: activate zero one density at a certain step:
+            if global_step == zero_one_density_iter:
+                print("ACTIVATING ZERO ONE DENSITY")
+                vol_mod.thre3d_repr.zero_one_density = True
 
             # wandb logging:
             wandb.log({"current LR" : float(current_stage_lrs[0])}, step=global_step)
@@ -386,6 +395,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"specular_psnr" : specular_psnr_value}, step=global_step)
             wandb.log({"diffuse_psnr" : diffuse_psnr_value}, step=global_step)
             wandb.log({"total_loss" : total_loss}, step=global_step)
+            wandb.log({"temperature" : vol_mod.thre3d_repr.temperature}, step=global_step)
+
+            if global_step % raise_temperature_iter == 0 and global_step >= start_raise_temperature_iter:
+                vol_mod.thre3d_repr.update_temperature(vol_mod.thre3d_repr.temperature * temperature_gamma)
+                print(f"Raising Temperature to {vol_mod.thre3d_repr.temperature * temperature_gamma}")
 
             # tensorboard summaries feedback
             if (
@@ -426,6 +440,40 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                         f"total_loss: {total_loss: .3f} "
                     )
                 log.info(loss_info_string)
+
+                # if model loss is better than we've seen so far, save it:
+                if total_loss < best_total_loss and stage == num_stages and global_step > zero_one_density_iter:
+                    best_total_loss = total_loss
+                    log.info(
+                    f"saving best model-snapshot at stage {stage}, global step {global_step}"
+                )
+                
+                if direct_zero_one_mode:
+                    z1_grid = vol_mod.thre3d_repr
+                    regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
+                    vol_mod.thre3d_repr = regular_grid
+                    torch.save(
+                        vol_mod.get_save_info(
+                            extra_info={
+                                CAMERA_BOUNDS: camera_bounds,
+                                CAMERA_INTRINSICS: camera_intrinsics,
+                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                            }
+                        ),
+                        model_dir / f"model_best.pth",
+                    )
+                    vol_mod.thre3d_repr = z1_grid
+                else:
+                    torch.save(
+                        vol_mod.get_save_info(
+                            extra_info={
+                                CAMERA_BOUNDS: camera_bounds,
+                                CAMERA_INTRINSICS: camera_intrinsics,
+                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                            }
+                        ),
+                        model_dir / f"model_best.pth",
+                    )
 
             # step the learning rate schedulers
             if stage_iteration % lr_decay_steps_per_stage == 0:
@@ -538,16 +586,32 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
     # save the final trained model
     log.info(f"Saving the final model-snapshot :)! Almost there ... yay!")
-    torch.save(
-        vol_mod.get_save_info(
-            extra_info={
-                "camera_bounds": camera_bounds,
-                "camera_intrinsics": camera_intrinsics,
-                "hemispherical_radius": train_dataset.get_hemispherical_radius_estimate(),
-            }
-        ),
-        model_dir / f"model_final.pth",
-    )
+    if direct_zero_one_mode:
+        z1_grid = vol_mod.thre3d_repr
+        regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
+        vol_mod.thre3d_repr = regular_grid
+        torch.save(
+            vol_mod.get_save_info(
+                extra_info={
+                    CAMERA_BOUNDS: camera_bounds,
+                    CAMERA_INTRINSICS: camera_intrinsics,
+                    HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                }
+            ),
+            model_dir / f"model_final.pth",
+        )
+        vol_mod.thre3d_repr = z1_grid
+    else:
+        torch.save(
+            vol_mod.get_save_info(
+                extra_info={
+                    CAMERA_BOUNDS: camera_bounds,
+                    CAMERA_INTRINSICS: camera_intrinsics,
+                    HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                }
+            ),
+            model_dir / f"model_final.pth",
+        )
 
     # training complete yay! :)
     log.info("Training complete")
