@@ -12,7 +12,7 @@ from thre3d_atom.rendering.volumetric.utils.misc import (
     compute_expected_density_scale_for_relu_field_grid,
 )
 from thre3d_atom.thre3d_reprs.renderers import (
-    render_sh_voxel_grid,
+    render_sh_voxelArt_grid,
     SHVoxGridRenderConfig,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid import VoxelArtGrid, VoxelSize, VoxelGridLocation
@@ -49,7 +49,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Input dataset related arguments:
 @click.option("--data_downsample_factor", type=click.FloatRange(min=1.0), required=False,
-              default=2.0, help="downscale factor for the input images if needed."
+              default=4.0, help="downscale factor for the input images if needed."
                                 "Note the default, for training NeRF-based scenes", show_default=True)
 
 # Voxel-grid related arguments:
@@ -74,7 +74,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -------------------------------------------------------------------------------------
 
 # Rendering related arguments:
-@click.option("--render_num_samples_per_ray", type=click.INT, required=False, default=512,
+@click.option("--render_num_samples_per_ray", type=click.INT, required=False, default=256,
               help="number of samples taken per ray during rendering", show_default=True)
 @click.option("--parallel_rays_chunk_size", type=click.INT, required=False, default=32768 / 4,
               help="number of parallel rays processed on the GPU for accelerated rendering", show_default=True)
@@ -83,11 +83,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               show_default=True)  # this option is also used in pre-processing the dataset
 
 # Training related arguments:
-@click.option("--ray_batch_size", type=click.INT, required=False, default=16384,
+@click.option("--ray_batch_size", type=click.INT, required=False, default=49152,
               help="number of randomly sampled rays used per training iteration", show_default=True)
 @click.option("--train_num_samples_per_ray", type=click.INT, required=False, default=256,
               help="number of samples taken per ray during training", show_default=True)
-@click.option("--num_stages", type=click.INT, required=False, default=4,
+@click.option("--num_stages", type=click.INT, required=False, default=3,
               help="number of progressive growing stages used in training", show_default=True)
 @click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1000,
               help="number of training iterations performed per stage", show_default=True)
@@ -97,7 +97,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
 @click.option("--lr_decay_steps_per_stage", type=click.INT, required=False, default=500,
               help="number of iterations after which lr is exponentially decayed per stage", show_default=True)
-@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=0.1,
+@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=0.15,
               help="value of gamma for exponential lr_decay (happens per stage)", show_default=True)
 @click.option("--stagewise_lr_decay_gamma", type=click.FLOAT, required=False, default=0.9,
               help="value of gamma used for reducing the learning rate after each stage", show_default=True)
@@ -131,12 +131,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Etai Additions:
 @click.option("--rtmv", type=click.BOOL, required=False, default=False,
               help="a flag ES added to change the way we load DATA to use the RTMV dataset", show_default=True)
-@click.option("--temperature_gamma", type=click.FLOAT, required=False, default=1.65,
+@click.option("--temperature_gamma", type=click.FLOAT, required=False, default=1.0,
               help="the gamma by which we increase temperature", show_default=True)
 @click.option("--raise_temperature_iter", type=click.INT, required=False, default=100,
               help="iteration in which to raise temperature", show_default=True)
-@click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
-              help="a flag to determine whether to quantize the voxel colors", show_default=True)
 @click.option("--use_pure_argmax", type=click.BOOL, required=False, default=False,
               help="a flag to determine whether to use pure argmax instead of heated softmax", show_default=True)
 @click.option("--num_colors", type=click.INT, required=False, default=5,
@@ -212,11 +210,8 @@ def main(**kwargs) -> None:
     # fmt: off
     densities = torch.empty((*config.grid_dims, 2), dtype=torch.float32, device=device)
     torch.nn.init.uniform_(densities, -1.0, 1.0)
-    if config.quantize_colors:
-        features = torch.empty((*config.grid_dims, config.num_colors), dtype=torch.float32, device=device)
-    else:
-        num_sh_features = NUM_COLOUR_CHANNELS * ((config.sh_degree + 1) ** 2)
-        features = torch.empty((*config.grid_dims, num_sh_features), dtype=torch.float32, device=device)
+    features = torch.empty((*config.grid_dims, config.num_colors), dtype=torch.float32, device=device)
+
 
     torch.nn.init.uniform_(features, -1.0, 1.0)
     voxel_size = VoxelSize(*[dim_size / grid_dim for dim_size, grid_dim
@@ -229,7 +224,6 @@ def main(**kwargs) -> None:
         **vox_grid_density_activations_dict,
         tunable=True,
         palette=palette,
-        quant_colors=config.quantize_colors,
         num_colors=config.num_colors,
         use_pure_argmax=config.use_pure_argmax
     )
@@ -239,7 +233,7 @@ def main(**kwargs) -> None:
     # noinspection PyTypeChecker
     vox_grid_vol_mod = VolumetricModel(
         thre3d_repr=voxel_grid,
-        render_procedure=render_sh_voxel_grid,
+        render_procedure=render_sh_voxelArt_grid,
         render_config=SHVoxGridRenderConfig(
             num_samples_per_ray=config.train_num_samples_per_ray,
             camera_bounds=train_dataset.camera_bounds,
@@ -272,10 +266,9 @@ def main(**kwargs) -> None:
         num_workers=config.num_workers,
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
-        direct_zero_one_mode=True, # this mode tells it that is a voxelArt grid with no cnn
+        voxel_art_mode=True, # this mode tells it that is a voxelArt grid with no cnn
         temperature_gamma=config.temperature_gamma,
         raise_temperature_iter=config.raise_temperature_iter,
-        quantize_colors=True
     )
 
 

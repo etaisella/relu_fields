@@ -327,7 +327,7 @@ def main(**kwargs) -> None:
         num_workers=config.num_workers,
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
-        voxelArt_mode=True,
+        voxel_art_3dcnn_mode=True,
         zero_one_density_iter=config.zero_one_density_iter,
         temperature_gamma=config.temperature_gamma,
         raise_temperature_iter=config.raise_temperature_iter,

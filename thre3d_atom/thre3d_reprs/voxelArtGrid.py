@@ -13,6 +13,7 @@ from thre3d_atom.thre3d_reprs.constants import (
     STATE_DICT,
     u_DENSITIES,
     u_FEATURES,
+    u_PALETTE,
     CONFIG_DICT,
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
@@ -73,7 +74,6 @@ class VoxelArtGrid(Module):
         radiance_transfer_function: Callable[[Tensor, Tensor], Tensor] = None,
         expected_density_scale: float = 1.0,
         tunable: bool = False,
-        quant_colors: bool = True,
         palette: Tensor = None,
         num_colors: int = 6,
         use_pure_argmax: bool = False,
@@ -124,19 +124,18 @@ class VoxelArtGrid(Module):
         self._voxel_size = voxel_size
         self._expected_density_scale = expected_density_scale
         self._tunable = tunable
+        self._palette = palette
         # ES addition: adding interpolation mode as a public member
         self.interpolation_mode = "bilinear"
 
         # VoxelArt specific stuff
         self.use_pure_argmax = use_pure_argmax
         print(f"Use pure argmax: {self.use_pure_argmax}")
-        self._palette = palette.to(self._device)
         self._st_pure_argmax = StraightThroughSoftMax()
         self._num_colors = num_colors
-        self._quant_colors_mode = quant_colors
         self.temperature = temperature
-        self._softmax_density = ST_SoftMax(self.temperature)
-        self._softmax_features = ST_SoftMax(10)
+        self._softmax_density = ST_SoftMax(1.0)
+        self._softmax_features = ST_SoftMax(1.0)
 
         if tunable:
             self._densities = torch.nn.Parameter(self._densities)
@@ -325,12 +324,22 @@ class VoxelArtGrid(Module):
         # obtain the range-normalized points for interpolation
         normalized_points = self._normalize_points(points)
 
+        if self._palette != None:
+            self._palette = self._palette.to(self._device)
+
         # interpolate and compute densities
         # Note the pre- and post-activations :)
         preactivated_densities = self._density_preactivation(
             self._densities * self._expected_density_scale
         )  # note the use of the expected density scale
         # ADDITION ES: Changed interpolation mode to nearest here
+
+        #----------------------------#
+        #         DENSITIES          #
+        #----------------------------#
+
+        zero_one_tensor = torch.tensor([-HIGH_DENSITY, HIGH_DENSITY]).to(self._device)
+        # regular densities
         interpolated_densities = (
             grid_sample(
                 # note the weird z, y, x convention of PyTorch's grid_sample.
@@ -346,18 +355,48 @@ class VoxelArtGrid(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
-        interpolated_densities = self._density_postactivation(interpolated_densities)
+
         interpolated_densities = torch.squeeze(interpolated_densities)
         if self.use_pure_argmax:
             interpolated_densities = self._st_pure_argmax(interpolated_densities)
         else:
             interpolated_densities = self._softmax_density(interpolated_densities)
-        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
+
         interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)
+        interpolated_densities = self._density_postactivation(interpolated_densities)
         interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
+
+        # va densities
+        interpolated_densities_va = (
+            grid_sample(
+                # note the weird z, y, x convention of PyTorch's grid_sample.
+                # reference ->
+                # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
+                preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
+                normalized_points[None, None, None, ...],
+                mode='nearest',
+                align_corners=False,
+            )
+            .permute(0, 2, 3, 4, 1)
+            .squeeze()
+        )[
+            ..., None
+        ]  # note this None is required because of the squeeze operation :sweat_smile:
+
+        interpolated_densities_va = torch.squeeze(interpolated_densities_va)
+        interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
+        interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)
+        interpolated_densities_va = self._density_postactivation(interpolated_densities_va)
+        interpolated_densities_va = torch.unsqueeze(interpolated_densities_va, dim=-1)
+
+        #----------------------------#
+        #          FEATURES          #
+        #----------------------------#
 
         # interpolate and compute features
         # ADDITION ES: Changed interpolation mode to nearest here
+
+        # regular features
         preactivated_features = self._feature_preactivation(self._features)
         interpolated_features = (
             grid_sample(
@@ -371,17 +410,34 @@ class VoxelArtGrid(Module):
         )
         interpolated_features = self._feature_postactivation(interpolated_features)
 
-        if self._quant_colors_mode:
-            if self.use_pure_argmax:
-                interpolated_features = self._st_pure_argmax(interpolated_features)
-            else: 
-                interpolated_features = self._softmax_features(interpolated_features)
-            interpolated_features = torch.matmul(interpolated_features, self._palette)
+        if self.use_pure_argmax:
+            interpolated_features = self._st_pure_argmax(interpolated_features)
+        else: 
+            interpolated_features = self._softmax_features(interpolated_features)
+        interpolated_features = torch.matmul(interpolated_features, self._palette)
+
+        # VA features
+        interpolated_features_va = (
+            grid_sample(
+                preactivated_features[None, ...].permute(0, 4, 3, 2, 1),
+                normalized_points[None, None, None, ...],
+                mode='nearest',
+                align_corners=False,
+            )
+            .permute(0, 2, 3, 4, 1)
+            .squeeze()
+        )
+        interpolated_features_va = self._feature_postactivation(interpolated_features_va)
+        interpolated_features_va = self._st_pure_argmax(interpolated_features_va)
+        interpolated_features_va = torch.matmul(interpolated_features_va, self._palette)
 
         # apply the radiance transfer function if it is not None and if view-directions are available
         if self._radiance_transfer_function is not None and viewdirs is not None:
             interpolated_features = self._radiance_transfer_function(
                 interpolated_features, viewdirs
+            )
+            interpolated_features_va = self._radiance_transfer_function(
+                interpolated_features_va, viewdirs
             )
 
         # get "ID ray"
@@ -396,12 +452,15 @@ class VoxelArtGrid(Module):
             .squeeze()
         )
 
-        # return a unified tensor containing interpolated features and densities
-        return torch.cat([interpolated_features, interpolated_densities], dim=-1)
+        # return a unified tensor containing interpolated features and densities, for both regular mode and va
+        result_regular = torch.cat([interpolated_features, interpolated_densities], dim=-1)
+        result_va = torch.cat([interpolated_features_va, interpolated_densities_va], dim=-1)
+
+        return result_regular, result_va, id_samples
 
     def create_voxel_grid_from_z1_voxel_grid(self) -> VoxelGrid:
         # get regular densities
-        softmaxed_densities = self._st_pure_argmax(self.densities).detach()
+        softmaxed_densities = self._softmax_density(self.densities).detach()
         #if self.use_pure_argmax:
         #    softmaxed_densities = self._st_pure_argmax(self.densities).detach()
         #else:
@@ -411,14 +470,11 @@ class VoxelArtGrid(Module):
         output_densities = torch.unsqueeze(output_densities, dim=-1)
 
         # get features
-        if self._quant_colors_mode:
-            if self.use_pure_argmax:
-                output_features = self._st_pure_argmax(self.features).detach()
-            else:
-                output_features = self._softmax_features(self.features).detach()
-            output_features = torch.matmul(output_features, self._palette)
+        if self.use_pure_argmax:
+            output_features = self._st_pure_argmax(self.features).detach()
         else:
-            output_features = self._features.detach()
+            output_features = self._softmax_features(self.features).detach()
+        output_features = torch.matmul(output_features, self._palette)
         
 
         # return regular grid
@@ -466,7 +522,6 @@ def scale_zero_one_voxel_grid_with_required_output_size(
         features=new_features[..., :-2],
         voxel_size=new_voxel_size,
         palette=voxel_grid._palette,
-        quant_colors=voxel_grid._quant_colors_mode,
         num_colors=voxel_grid._num_colors,
         use_pure_argmax=voxel_grid.use_pure_argmax,
         **voxel_grid.get_config_dict(),
@@ -475,12 +530,12 @@ def scale_zero_one_voxel_grid_with_required_output_size(
     # noinspection PyProtectedMember
     return new_voxel_grid
 
-
-def create_zero_one_voxel_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelArtGrid:
+def create_voxelArt_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelArtGrid:
     densities = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_DENSITIES])
     features = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_FEATURES])
     voxel_grid = VoxelArtGrid(
-        densities=densities, features=features, **saved_info[THRE3D_REPR][CONFIG_DICT]
+        densities=densities, features=features, \
+             **saved_info[THRE3D_REPR][CONFIG_DICT]
     )
     voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])
     return voxel_grid

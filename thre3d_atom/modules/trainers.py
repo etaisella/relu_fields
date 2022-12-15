@@ -21,7 +21,9 @@ from thre3d_atom.modules.volumetric_model import VolumetricModel
 from thre3d_atom.rendering.volumetric.utils.misc import (
     cast_rays,
     collate_rays,
+    collate_rays_unflattened,
     sample_random_rays_and_pixels_synchronously,
+    sample_rays_and_pixels_synchronously,
     flatten_rays,
 )
 from thre3d_atom.thre3d_reprs.renderers import render_sh_voxel_grid
@@ -67,7 +69,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     ),
     test_dataset: Optional[PosedImagesDataset] = None,
     image_batch_cache_size: int = 8,
-    ray_batch_size: int = 32768,
+    ray_batch_size: int = 49152,
     num_stages: int = 4,
     num_iterations_per_stage: int = 2000,
     scale_factor: float = 2.0,
@@ -89,13 +91,13 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     num_workers: int = 4,
     verbose_rendering: bool = True,
     fast_debug_mode: bool = False,
-    voxelArt_mode: bool = False,
-    direct_zero_one_mode: bool = False,
-    quantize_colors: bool=False,
+    voxel_art_3dcnn_mode: bool = False,
+    voxel_art_mode: bool = False,
     temperature_gamma: float=1.15,
     raise_temperature_iter: int=200,
     zero_one_density_iter=-1,
-    start_raise_temperature_iter=-1
+    start_raise_temperature_iter=-1,
+    random_sample_mode=False,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -127,18 +129,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         num_workers: num_workers used by pytorch dataloader
         verbose_rendering: bool to control whether to show verbose details while generating rendered feedback
         fast_debug_mode: bool to control fast_debug_mode, skips testing and some other things
-        voxelArt_mode: bool to control voxel Art mode, in which we don't use stages
+        voxel_art_3dcnn_mode: bool to control voxel Art mode, in which we don't use stages
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
-    # assertions about the VolumetricModel being used with this TrainProcedure :)
-    #assert isinstance(vol_mod.thre3d_repr, VoxelGrid) or isinstance(vol_mod.thre3d_repr, VoxelArtGrid) \
-    #    or isinstance(vol_mod.thre3d_repr, VoxelArtGrid_3DCNN), (
-    #    f"sorry, cannot use a {type(vol_mod.thre3d_repr)} with this TrainProcedure :(; "
-    #    f"only a {type(VoxelGrid)} or {type(VoxelArtGrid)} or {type(VoxelArtGrid_3DCNN)} can be used"
-    #)
-    assert (
-        vol_mod.render_procedure == render_sh_voxel_grid
-    ), f"sorry, non SH-based VoxelGrids cannot be used with this TrainProcedure"
 
     best_total_loss = INIT_TOTAL_LOSS
 
@@ -160,11 +153,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         stagewise_train_datasets.insert(0, PosedImagesDataset(**dataset_config_dict))
 
     # downscale the feature-grid to the smallest size:
-    if not voxelArt_mode: 
+    if not voxel_art_3dcnn_mode: 
         with torch.no_grad():
             # TODO: Possibly create a nice interface for reprs as a resolution of the below warning
             # noinspection PyTypeChecker
-            if direct_zero_one_mode:
+            if voxel_art_mode:
                 vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
                     vol_mod.thre3d_repr,
                     output_size=stagewise_voxel_grid_sizes[0],
@@ -310,6 +303,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
             # cast rays for all the loaded images:
             rays_list = []
+            unflattened_rays_list = []
             for pose in poses:
                 unflattened_rays = cast_rays(
                         current_stage_train_dataset.camera_intrinsics,
@@ -318,7 +312,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     )
                 casted_rays = flatten_rays(unflattened_rays)
                 rays_list.append(casted_rays)
+                unflattened_rays_list.append(unflattened_rays)
+                
             rays = collate_rays(rays_list)
+            unflattened_rays = collate_rays_unflattened(unflattened_rays_list)
 
             # images are of shape [B x C x H x W] and pixels are [B * H * W x C]
             pixels = (
@@ -326,14 +323,21 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 .reshape(-1, images.shape[1])
                 .to(vol_mod.device)
             )
+            _, _, im_h, im_w = images.shape
 
             # sample a subset of rays and pixels synchronously
-            rays_batch, pixels_batch = sample_random_rays_and_pixels_synchronously(
-                rays, pixels, ray_batch_size
-            )
+            if random_sample_mode:
+                rays_batch, pixels_batch = sample_random_rays_and_pixels_synchronously(
+                    rays, pixels, ray_batch_size
+                )
+            else:
+                batch_size_in_images = int(ray_batch_size / (im_h * im_w))
+                rays_batch, pixels_batch = sample_rays_and_pixels_synchronously(
+                    unflattened_rays, images, batch_size_in_images
+                )
 
             # render a small chunk of rays and compute a loss on it
-            specular_rendered_batch = vol_mod.render_rays(rays_batch)
+            specular_rendered_batch, specular_rendered_batch_va, id_maps = vol_mod.render_rays(rays_batch)
             specular_rendered_pixels_batch = specular_rendered_batch.colour
 
             # compute loss and perform gradient update
@@ -350,7 +354,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             diffuse_loss_value, diffuse_psnr_value = None, None
             if apply_diffuse_render_regularization:
                 # render only the diffuse version for the rays
-                diffuse_rendered_batch = vol_mod.render_rays(
+                diffuse_rendered_batch, diffuse_rendered_batch_va, id_maps  = vol_mod.render_rays(
                     rays_batch, render_diffuse=True
                 )
                 diffuse_rendered_pixels_batch = diffuse_rendered_batch.colour
@@ -375,17 +379,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # rest of the code per iteration is related to saving/logging/feedback/testing
             time_spent_actually_training += time.perf_counter() - last_time
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
-            
-            # ES Addition: activate pure argmax at a certain step:
-            last_step = num_stages * num_iterations_per_stage - 1
-            if global_step == last_step:
-                print("ACTIVATING ZERO ONE DENSITY")
-                vol_mod.thre3d_repr.use_pure_argmax = True
-            
-            # ES Addition: activate zero one density at a certain step:
-            if global_step == zero_one_density_iter:
-                print("ACTIVATING ZERO ONE DENSITY")
-                vol_mod.thre3d_repr.zero_one_density = True
 
             # wandb logging:
             wandb.log({"current LR" : float(current_stage_lrs[0])}, step=global_step)
@@ -447,33 +440,16 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     log.info(
                     f"saving best model-snapshot at stage {stage}, global step {global_step}"
                 )
-                
-                if direct_zero_one_mode:
-                    z1_grid = vol_mod.thre3d_repr
-                    regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
-                    vol_mod.thre3d_repr = regular_grid
-                    torch.save(
-                        vol_mod.get_save_info(
-                            extra_info={
-                                CAMERA_BOUNDS: camera_bounds,
-                                CAMERA_INTRINSICS: camera_intrinsics,
-                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                            }
-                        ),
-                        model_dir / f"model_best.pth",
-                    )
-                    vol_mod.thre3d_repr = z1_grid
-                else:
-                    torch.save(
-                        vol_mod.get_save_info(
-                            extra_info={
-                                CAMERA_BOUNDS: camera_bounds,
-                                CAMERA_INTRINSICS: camera_intrinsics,
-                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                            }
-                        ),
-                        model_dir / f"model_best.pth",
-                    )
+                torch.save(
+                    vol_mod.get_save_info(
+                        extra_info={
+                            CAMERA_BOUNDS: camera_bounds,
+                            CAMERA_INTRINSICS: camera_intrinsics,
+                            HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                        }
+                    ),
+                    model_dir / f"model_best.pth",
+                )
 
             # step the learning rate schedulers
             if stage_iteration % lr_decay_steps_per_stage == 0:
@@ -532,33 +508,16 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 log.info(
                     f"saving model-snapshot at stage {stage}, global step {global_step}"
                 )
-                
-                if direct_zero_one_mode:
-                    z1_grid = vol_mod.thre3d_repr
-                    regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
-                    vol_mod.thre3d_repr = regular_grid
-                    torch.save(
-                        vol_mod.get_save_info(
-                            extra_info={
-                                CAMERA_BOUNDS: camera_bounds,
-                                CAMERA_INTRINSICS: camera_intrinsics,
-                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                            }
-                        ),
-                        model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
-                    )
-                    vol_mod.thre3d_repr = z1_grid
-                else:
-                    torch.save(
-                        vol_mod.get_save_info(
-                            extra_info={
-                                CAMERA_BOUNDS: camera_bounds,
-                                CAMERA_INTRINSICS: camera_intrinsics,
-                                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                            }
-                        ),
-                        model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
-                    )
+                torch.save(
+                    vol_mod.get_save_info(
+                        extra_info={
+                            CAMERA_BOUNDS: camera_bounds,
+                            CAMERA_INTRINSICS: camera_intrinsics,
+                            HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+                        }
+                    ),
+                    model_dir / f"model_stage_{stage}_iter_{global_step}.pth",
+                )
 
             # ignore all the time spent doing verbose stuff :) and update
             # the last_time clock event
@@ -570,7 +529,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # upsample the feature-grid after the completion of the stage:
             with torch.no_grad():
                 # noinspection PyTypeChecker
-                if direct_zero_one_mode:
+                if voxel_art_mode:
                     vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
                         vol_mod.thre3d_repr,
                         output_size=stagewise_voxel_grid_sizes[stage],
@@ -586,32 +545,16 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
     # save the final trained model
     log.info(f"Saving the final model-snapshot :)! Almost there ... yay!")
-    if direct_zero_one_mode:
-        z1_grid = vol_mod.thre3d_repr
-        regular_grid = z1_grid.create_voxel_grid_from_z1_voxel_grid()
-        vol_mod.thre3d_repr = regular_grid
-        torch.save(
-            vol_mod.get_save_info(
-                extra_info={
-                    CAMERA_BOUNDS: camera_bounds,
-                    CAMERA_INTRINSICS: camera_intrinsics,
-                    HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                }
-            ),
-            model_dir / f"model_final.pth",
-        )
-        vol_mod.thre3d_repr = z1_grid
-    else:
-        torch.save(
-            vol_mod.get_save_info(
-                extra_info={
-                    CAMERA_BOUNDS: camera_bounds,
-                    CAMERA_INTRINSICS: camera_intrinsics,
-                    HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
-                }
-            ),
-            model_dir / f"model_final.pth",
-        )
+    torch.save(
+        vol_mod.get_save_info(
+            extra_info={
+                CAMERA_BOUNDS: camera_bounds,
+                CAMERA_INTRINSICS: camera_intrinsics,
+                HEMISPHERICAL_RADIUS: train_dataset.get_hemispherical_radius_estimate(),
+            }
+        ),
+        model_dir / f"model_final.pth",
+    )
 
     # training complete yay! :)
     log.info("Training complete")

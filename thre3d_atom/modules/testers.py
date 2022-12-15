@@ -27,7 +27,7 @@ def test_sh_vox_grid_vol_mod_with_posed_images(
     for (image, pose) in tqdm(test_dl):
         image, pose = image[0], pose[0]  # testing batching is always 1
         # noinspection PyUnresolvedReferences
-        rendered_output = vol_mod.render(
+        rendered_output, _, _ = vol_mod.render(
             camera_pose=CameraPose(rotation=pose[:, :3], translation=pose[:, 3:]),
             camera_intrinsics=test_dl.dataset.camera_intrinsics,
             parallel_rays_chunk_size=parallel_rays_chunk_size,

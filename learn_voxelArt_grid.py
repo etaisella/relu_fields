@@ -278,7 +278,7 @@ def main(**kwargs) -> None:
         num_workers=config.num_workers,
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
-        voxelArt_mode=True,
+        voxel_art_3dcnn_mode=True,
     )
 
 # -------------------------------------------------------------------------------------

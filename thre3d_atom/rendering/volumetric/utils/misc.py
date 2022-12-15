@@ -65,6 +65,16 @@ def collate_rays(rays_list: Sequence[Rays]) -> Rays:
     )
 
 
+def collate_rays_unflattened(rays_list: Sequence[Rays]) -> Rays:
+    """utility method for collating rays"""
+    return Rays(
+        origins=torch.cat([torch.unsqueeze(rays.origins, dim=0) for rays in rays_list], \
+            dim=0),
+        directions=torch.cat([torch.unsqueeze(rays.directions, dim=0) for rays in rays_list], \
+             dim=0),
+    )
+
+
 def compute_expected_density_scale_for_relu_field_grid(
     grid_world_size: Tuple[float, float, float]
 ) -> float:
@@ -147,6 +157,24 @@ def collate_rendered_output(rendered_chunks: Sequence[RenderOut]) -> RenderOut:
 
     # return the collated rendered_output
     return RenderOut(colour=colour, depth=depth, extra=extra)
+
+
+def sample_rays_and_pixels_synchronously(
+    rays: Rays,
+    pixels: Tensor,
+    sample_size: int,
+) -> Tuple[Rays, Tensor]:
+    dtype, device = pixels.dtype, pixels.device
+    permutation = torch.randperm(pixels.shape[0], dtype=torch.long, device=device)
+    sampled_subset = permutation[:sample_size]
+    rays_origins, rays_directions = rays.origins, rays.directions
+    selected_rays_origins = rays_origins[sampled_subset, :]
+    selected_rays_directions = rays_directions[sampled_subset, :]
+    flattened_selected_rays = flatten_rays(Rays(selected_rays_origins, selected_rays_directions))
+    selected_pixels = pixels[sampled_subset, :]
+    selected_pixels = selected_pixels.permute(0, 2, 3, 1).reshape(-1, pixels.shape[1])
+    return flattened_selected_rays, selected_pixels
+
 
 
 def reshape_rendered_output(

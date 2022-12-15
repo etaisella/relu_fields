@@ -126,7 +126,7 @@ class VolumetricModel:
         gpu_render: bool = True,
         verbose: bool = False,
         **kwargs,
-    ) -> RenderOut:
+    ) -> Tuple[RenderOut, RenderOut]:
         """
         renders the underlying thre3d_repr for the given camera parameters. Please
         note that this method works in pytorch's no_grad mode.
@@ -152,6 +152,8 @@ class VolumetricModel:
         # note that we are not using `batchify` here because of the gpu_cpu handling code
         # TODO: Improve the batchify utility to account for this following use case :)
         rendered_chunks = []
+        rendered_chunks_va = []
+        id_map_chunks = []
         parallel_rays_chunk_size = (
             len(flat_rays)
             if parallel_rays_chunk_size is None
@@ -161,21 +163,32 @@ class VolumetricModel:
             for chunk_index in progress_bar(
                 range(0, len(flat_rays), parallel_rays_chunk_size)
             ):
-                rendered_chunk = self.render_rays(
+                rendered_chunk, rendered_chunk_va, id_map_chunk = self.render_rays(
                     flat_rays[chunk_index : chunk_index + parallel_rays_chunk_size],
                     parallel_points_chunk_size,
                     **kwargs,
                 )
                 if not gpu_render:
                     rendered_chunk = rendered_chunk.to(torch.device("cpu"))
+                    rendered_chunk_va = rendered_chunk_va.to(torch.device("cpu"))
                 rendered_chunks.append(rendered_chunk)
+                rendered_chunks_va.append(rendered_chunk_va)
+                id_map_chunks.append(id_map_chunk)
+
+        id_map_output = torch.cat(id_map_chunks, dim=0)
+        id_map_output = torch.reshape(id_map_output, \
+            (camera_intrinsics.height, camera_intrinsics.width, -1))
 
         rendered_output = reshape_rendered_output(
             collate_rendered_output(rendered_chunks),
             camera_intrinsics=camera_intrinsics,
         )
+        rendered_output_va = reshape_rendered_output(
+            collate_rendered_output(rendered_chunks_va),
+            camera_intrinsics=camera_intrinsics,
+        )
 
-        return rendered_output
+        return rendered_output, rendered_output_va, id_map_output
 
 
 def create_volumetric_model_from_saved_model(

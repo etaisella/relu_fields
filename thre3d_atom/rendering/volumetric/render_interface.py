@@ -1,5 +1,5 @@
 import dataclasses
-from typing import NamedTuple, Any, Dict, Callable, Optional
+from typing import NamedTuple, Any, Dict, Callable, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -98,7 +98,7 @@ ProcessedPointsOnRays = SampledPointsOnRays
 RaySamplerFunction = Callable[[Rays, CameraBounds, int], SampledPointsOnRays]
 PointProcessorFunction = Callable[[SampledPointsOnRays, Rays], ProcessedPointsOnRays]
 AccumulatorFunction = Callable[[ProcessedPointsOnRays, Rays], RenderOut]
-
+AccumulatorFunction_va = Callable[[ProcessedPointsOnRays, Tensor, Rays], Tuple[RenderOut, Tensor]]
 
 def render(
     rays: Rays,
@@ -132,3 +132,39 @@ def render(
     processed_points = point_processor_fn(sampled_points, rays)
     rendered_output = accumulator_fn(processed_points, rays)
     return rendered_output
+
+def render_va(
+    rays: Rays,
+    camera_bounds: CameraBounds,
+    num_samples: int,
+    sampler_fn: RaySamplerFunction,
+    point_processor_fn: PointProcessorFunction,
+    accumulator_fn: AccumulatorFunction,
+    accumulator_fn_va: AccumulatorFunction_va,
+) -> RenderOut:
+    """
+    Defines the overall flow of execution of the differentiable
+    volumetric rendering process. Please note that this interface has been
+    designed to allow enough flexibility in the rendering process.
+    Note that this render interface strongly assumes ``FLAT RAYS''.
+    This is done to make the interface consistent and debugging easier
+    Args:
+        rays: virtual casted rays (origins and directions). Aka, ray-marching probes
+        camera_bounds: SceneBounds (near and far) of the scene being rendered
+        num_samples: number of points sampled on the rays
+        sampler_fn: function that maps from casted rays to sampled points on the rays.
+        point_processor_fn: function to process the points on the rays.
+        accumulator_fn: function that accumulates the processed points into rendered
+                        output.
+    Returns: rendered output (rgb, depth and extra information)
+    """
+    assert (
+        len(rays.origins.shape) == len(rays.directions.shape) == 2
+    ), f"Please note that the RENDER interface only works with FLAT RAYS!"
+
+    sampled_points = sampler_fn(rays, camera_bounds, num_samples)
+    processed_points, processed_va_points, id_rays = point_processor_fn(sampled_points, rays)
+    rendered_output_regular = accumulator_fn(processed_points, rays)
+    rendered_output_va, rendered_id_map = accumulator_fn_va(processed_va_points, id_rays, rays)
+
+    return rendered_output_regular, rendered_output_va, rendered_id_map

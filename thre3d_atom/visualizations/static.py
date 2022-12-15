@@ -25,6 +25,8 @@ from thre3d_atom.utils.imaging_utils import (
 )
 from thre3d_atom.utils.logging import log
 
+from torch import Tensor
+import torch
 import wandb
 
 def visualize_camera_rays(
@@ -79,6 +81,24 @@ def visualize_camera_rays(
     plt.savefig(output_dir / "casted_camera_rays.png", dpi=600)
     plt.close(fig)
 
+def _process_rendered_id_output_for_feedback_log(
+    rendered_output: Tensor,
+    max_grid_dim: int,
+) -> np.array:
+    rendered_output_np = rendered_output.cpu().numpy()
+
+    # force background to be whiter than the voxels:
+    background_value = 1.05 * max_grid_dim 
+    rendered_output_np[rendered_output_np < 0] = background_value
+
+    # normalize to 0-1:
+    rendered_output_np = rendered_output_np / background_value
+    
+    # move to 8b
+    result = to8b(rendered_output_np)
+
+    return result
+    
 
 def _process_rendered_output_for_feedback_log(
     rendered_output: RenderOut,
@@ -111,7 +131,6 @@ def _process_rendered_output_for_feedback_log(
 
     # ES Addition: Output only the color map
     return colour_map
-    #return feedback_image
 
 
 def visualize_sh_vox_grid_vol_mod_rendered_feedback(
@@ -138,7 +157,7 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
     # render images
     log.info(f"rendering intermediate output for feedback")
 
-    specular_rendered_output = vol_mod.render(
+    specular_rendered_output, specular_rendered_output_va, id_img = vol_mod.render(
         camera_pose=render_feedback_pose,
         camera_intrinsics=camera_intrinsics,
         parallel_rays_chunk_size=parallel_rays_chunk_size,
@@ -147,9 +166,23 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
         optimized_sampling=use_optimized_sampling_mode,
         num_samples_per_ray=overridden_num_samples_per_ray_for_beautiful_renders,
     )
+
+    grid_x, grid_y, grid_z, _ = vol_mod.thre3d_repr._densities.shape
+    max_grid_dim = max([grid_x, grid_y, grid_z])
+
+    id_feedback_image = _process_rendered_id_output_for_feedback_log(
+        id_img,
+        max_grid_dim
+    )
+
     specular_feedback_image = _process_rendered_output_for_feedback_log(
         specular_rendered_output, vol_mod.render_config.camera_bounds, training_time
     )
+
+    va_feedback_image = _process_rendered_output_for_feedback_log(
+        specular_rendered_output_va, vol_mod.render_config.camera_bounds, training_time
+    )
+
     imageio.imwrite(
         feedback_logs_dir / f"specular_{global_step}.png",
         specular_feedback_image,
@@ -157,31 +190,22 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
 
     wandb.log({"specular img": wandb.Image(specular_feedback_image)}, step=global_step)
 
-    # ES Addition: Render Voxelized Version
-    vol_mod.thre3d_repr.interpolation_mode = "nearest"
-    nn_specular_rendered_output = vol_mod.render(
-        camera_pose=render_feedback_pose,
-        camera_intrinsics=camera_intrinsics,
-        parallel_rays_chunk_size=parallel_rays_chunk_size,
-        gpu_render=True,
-        verbose=verbose_rendering,
-        optimized_sampling=use_optimized_sampling_mode,
-        num_samples_per_ray=overridden_num_samples_per_ray_for_beautiful_renders,
-    )
-    nn_specular_feedback_image = _process_rendered_output_for_feedback_log(
-        nn_specular_rendered_output, vol_mod.render_config.camera_bounds, training_time
-    )
-    vol_mod.thre3d_repr.interpolation_mode = "bilinear"
-
     imageio.imwrite(
         feedback_logs_dir / f"voxelized_{global_step}.png",
-        nn_specular_feedback_image,
+        va_feedback_image,
     )
 
-    wandb.log({"voxelized img": wandb.Image(nn_specular_feedback_image)}, step=global_step)
+    wandb.log({"voxelized img": wandb.Image(va_feedback_image)}, step=global_step)
+
+    imageio.imwrite(
+        feedback_logs_dir / f"voxel_id_map_{global_step}.png",
+        id_feedback_image,
+    )
+
+    wandb.log({"voxel id map": wandb.Image(id_feedback_image)}, step=global_step)
 
     if log_diffuse_rendered_version:
-        diffuse_rendered_output = vol_mod.render(
+        diffuse_rendered_output, _, _ = vol_mod.render(
             camera_pose=render_feedback_pose,
             camera_intrinsics=camera_intrinsics,
             parallel_rays_chunk_size=parallel_rays_chunk_size,
@@ -199,4 +223,4 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
             diffuse_feedback_image,
         )
     
-    wandb.log({"diffuse img": wandb.Image(diffuse_feedback_image)}, step=global_step)
+        wandb.log({"diffuse img": wandb.Image(diffuse_feedback_image)}, step=global_step)

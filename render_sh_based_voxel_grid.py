@@ -7,7 +7,7 @@ import torch
 from thre3d_atom.modules.volumetric_model import (
     create_volumetric_model_from_saved_model,
 )
-from thre3d_atom.thre3d_reprs.voxels import create_voxel_grid_from_saved_info_dict
+from thre3d_atom.thre3d_reprs.voxelArtGrid import create_voxelArt_grid_from_saved_info_dict
 from thre3d_atom.utils.constants import HEMISPHERICAL_RADIUS, CAMERA_INTRINSICS
 from thre3d_atom.utils.imaging_utils import (
     get_thre360_animation_poses,
@@ -19,6 +19,7 @@ from thre3d_atom.visualizations.animations import (
     render_camera_path_for_volumetric_model_3_coeff_modes_gray,
 )
 from easydict import EasyDict
+from get_palette import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -34,6 +35,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=True, help="path to the trained (reconstructed) model")
 @click.option("-o", "--output_path", type=click.Path(file_okay=False, dir_okay=True),
               required=True, help="path for saving rendered output")
+@click.option("-d", "--data_path", type=click.Path(file_okay=False, dir_okay=True),
+              required=True, help="path to the input dataset, required for calculating palette")
 
 # Non-required Render configuration options:
 @click.option("--overridden_num_samples_per_ray", type=click.IntRange(min=1), default=512,
@@ -64,8 +67,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=False, help="Make zero coeffs gray to view the effects of higher order coeffs")
 @click.option("--three_coeff_mode", type=click.BOOL, default=False,
               required=False, help="Render the three diffreent coeff modes to see the effects")
-@click.option("--voxelized", type=click.BOOL, default=False,
-              required=False, help="Render the three diffreent coeff modes to see the effectd")
+@click.option("--num_colors", type=click.IntRange(min=1), default=5,
+              required=False, help="Number of colors in palette")
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -77,19 +80,34 @@ def main(**kwargs) -> None:
     model_path = Path(config.model_path)
     output_path = Path(config.output_path)
 
+    # getting palette:
+    data_path = Path(config.data_path)
+
+    # get palette here
+    print("Calculating Palette - be patient!")
+    concat_image = concatenate_images(data_path/"train")
+    palette = get_palette(concat_image, config.num_colors)
+
+    # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
+    C0 = 0.28209479177387814
+    EPSILON = 1e-5
+    palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
+    palette = torch.logit(palette)
+    palette = palette / C0
+
     # create the output path if it doesn't exist
     output_path.mkdir(exist_ok=True, parents=True)
 
     # load volumetric_model from the model_path
     vol_mod, extra_info = create_volumetric_model_from_saved_model(
         model_path=model_path,
-        thre3d_repr_creator=create_voxel_grid_from_saved_info_dict,
+        thre3d_repr_creator=create_voxelArt_grid_from_saved_info_dict,
         device=device,
         num_clusters=config.clusters,
     )
 
-    if config.voxelized:
-        vol_mod.thre3d_repr.interpolation_mode = "nearest"
+    vol_mod.thre3d_repr._palette = palette
+    vol_mod.num_colors = config.num_colors
 
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]
