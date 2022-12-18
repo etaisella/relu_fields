@@ -81,7 +81,7 @@ def visualize_camera_rays(
     plt.savefig(output_dir / "casted_camera_rays.png", dpi=600)
     plt.close(fig)
 
-def _process_rendered_id_output_for_feedback_log(
+def process_rendered_id_output_for_feedback_log(
     rendered_output: Tensor,
     max_grid_dim: int,
 ) -> np.array:
@@ -170,7 +170,7 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
     grid_x, grid_y, grid_z, _ = vol_mod.thre3d_repr._densities.shape
     max_grid_dim = max([grid_x, grid_y, grid_z])
 
-    id_feedback_image = _process_rendered_id_output_for_feedback_log(
+    id_feedback_image = process_rendered_id_output_for_feedback_log(
         id_img,
         max_grid_dim
     )

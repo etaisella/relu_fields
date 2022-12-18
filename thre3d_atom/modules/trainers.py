@@ -33,6 +33,7 @@ from thre3d_atom.thre3d_reprs.voxels import (
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     VoxelArtGrid,
+    sa_loss,
     scale_zero_one_voxel_grid_with_required_output_size,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
@@ -54,7 +55,6 @@ from thre3d_atom.visualizations.static import (
 )
 
 import torchvision.transforms as T
-# TrainProcedure = Callable[[VolumetricModel, Dataset, ...], VolumetricModel]
 
 INIT_TOTAL_LOSS = 9999.0
 
@@ -95,9 +95,12 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     voxel_art_mode: bool = False,
     temperature_gamma: float=1.15,
     raise_temperature_iter: int=200,
-    zero_one_density_iter=-1,
-    start_raise_temperature_iter=-1,
-    random_sample_mode=False,
+    zero_one_density_iter: int=-1,
+    start_raise_temperature_iter: int=-1,
+    random_sample_mode: bool=False,
+    sa_start_iter: int=-1,
+    sa_init_weight: float=0.1,
+    sa_gamma: float=0.15,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -344,6 +347,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # Main, specular loss
             total_loss = l1_loss(specular_rendered_pixels_batch, pixels_batch)
 
+            # ES: Compute Shift-Aware loss:
+            shift_aware_loss = sa_loss(specular_rendered_batch_va.colour, pixels_batch, id_maps, im_h, im_w)
+            shift_aware_loss_value = shift_aware_loss.item()
+
             # logging info:
             specular_loss_value = total_loss.item()
             specular_psnr_value = mse2psnr(
@@ -389,6 +396,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"diffuse_psnr" : diffuse_psnr_value}, step=global_step)
             wandb.log({"total_loss" : total_loss}, step=global_step)
             wandb.log({"temperature" : vol_mod.thre3d_repr.temperature}, step=global_step)
+            wandb.log({"shift aware loss" : shift_aware_loss_value}, step=global_step)
 
             if global_step % raise_temperature_iter == 0 and global_step >= start_raise_temperature_iter:
                 vol_mod.thre3d_repr.update_temperature(vol_mod.thre3d_repr.temperature * temperature_gamma)
@@ -425,6 +433,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"Stage Iteration: {stage_iteration} "
                     f"specular_loss: {specular_loss_value: .3f} "
                     f"specular_psnr: {specular_psnr_value.item(): .3f} "
+                    f"SA Loss: {shift_aware_loss_value: .3f} "
                 )
                 if apply_diffuse_render_regularization:
                     loss_info_string += (

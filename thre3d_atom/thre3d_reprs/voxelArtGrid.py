@@ -13,12 +13,88 @@ from thre3d_atom.thre3d_reprs.constants import (
     STATE_DICT,
     u_DENSITIES,
     u_FEATURES,
-    u_PALETTE,
     CONFIG_DICT,
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
 
+# TODO: Remove these includes later, they are here for debugging
+#####
+import imageio
+import numpy as np
+
+#def to8b(x: np.array) -> np.array:
+#    return (255 * np.clip(x, 0, 1)).astype(np.uint8)
+#
+#def process_rendered_id_output_for_feedback_log(
+#    rendered_output: Tensor,
+#    max_grid_dim: int,
+#) -> np.array:
+#    rendered_output_np = rendered_output.cpu().numpy()
+#
+#    # force background to be whiter than the voxels:
+#    background_value = 1.05 * max_grid_dim 
+#    rendered_output_np[rendered_output_np < 0] = background_value
+#
+#    # normalize to 0-1:
+#    rendered_output_np = rendered_output_np / background_value
+#    
+#    # move to 8b
+#    result = to8b(rendered_output_np)
+#
+#    return result
+#####
+
 HIGH_DENSITY = 1000.0
+
+def sa_loss(output: Tensor,
+            target: Tensor,
+            voxel_ids: Tensor,
+            image_height: int,
+            image_width: int):
+    """Calculates shift aware loss on an output image"""
+    device = target.device
+    out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
+    target_imgs = torch.reshape(target, (-1, image_height, image_width, 3))
+    vox_idx_imgs = torch.reshape(voxel_ids, (-1, image_height, image_width, 3))
+    num_images = out_imgs.shape[0]
+    vox_id_img = torch.empty((num_images, image_height, image_width, 1))
+    vox_id_img[:, :, :, 0] = vox_idx_imgs[:, :, :, 0] + \
+                        32 * vox_idx_imgs[:, :, :, 1] + \
+                        32 * 32 * vox_idx_imgs[:, :, :, 2]
+
+    loss_class = torch.nn.L1Loss(reduction='none')
+    overall_sa_loss = torch.tensor([0.0], device=device)
+
+    # 1. Iteratre over all frames in batch:
+    for img_idx in range(num_images):
+        loss_for_frame = torch.tensor([0.0], device=device)
+        out_frame = out_imgs[img_idx]
+        target_frame = target_imgs[img_idx]
+
+        # 1.a. Calculate diff image:
+        diff_img = torch.mean(loss_class(out_frame, target_frame), dim=-1)
+
+        # 1.b. Get unique voxel ids:
+        id_frame = torch.squeeze(vox_id_img[img_idx])
+        unique_ids = torch.unique(id_frame)
+
+        # 2. Iterate over all unique ids:
+        for unique_id in unique_ids.tolist():
+            diffs_for_voxel = diff_img[id_frame == unique_id]
+
+            # 2.a. Add minimum difference:
+            min_diff = torch.min(diffs_for_voxel)
+            loss_for_frame += min_diff
+        
+        # 3. Normalize difference by num of unique ids:
+        loss_for_frame = loss_for_frame / unique_ids.shape[0]
+        
+        # 4. Add to overall loss:
+        overall_sa_loss += loss_for_frame
+    
+    overall_sa_loss = overall_sa_loss / num_images
+    return overall_sa_loss
+    
 
 def fill_id_grid(empty_grid: Tensor, grid_dims: Tuple):
     """takes an empty grid and fills it with voxel locations,
@@ -338,7 +414,12 @@ class VoxelArtGrid(Module):
         #         DENSITIES          #
         #----------------------------#
 
-        zero_one_tensor = torch.tensor([-HIGH_DENSITY, HIGH_DENSITY]).to(self._device)
+        # old method
+        zero_one_tensor = torch.tensor([0, HIGH_DENSITY]).to(self._device)
+
+        # new method
+        #zero_one_tensor = torch.tensor([-HIGH_DENSITY, HIGH_DENSITY]).to(self._device)
+
         # regular densities
         interpolated_densities = (
             grid_sample(
@@ -355,13 +436,25 @@ class VoxelArtGrid(Module):
         )[
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
+        
+        # old method
+        #interpolated_densities = torch.squeeze(interpolated_densities)
+        #interpolated_densities = self._density_postactivation(interpolated_densities)
+        #
+        #if self.use_pure_argmax:
+        #    interpolated_densities = self._st_pure_argmax(interpolated_densities)
+        #else:
+        #    interpolated_densities = self._softmax_density(interpolated_densities)
+        #
+        #interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)  
+        #interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
 
+        # new method
         interpolated_densities = torch.squeeze(interpolated_densities)
         if self.use_pure_argmax:
             interpolated_densities = self._st_pure_argmax(interpolated_densities)
         else:
             interpolated_densities = self._softmax_density(interpolated_densities)
-
         interpolated_densities = torch.matmul(interpolated_densities, zero_one_tensor)
         interpolated_densities = self._density_postactivation(interpolated_densities)
         interpolated_densities = torch.unsqueeze(interpolated_densities, dim=-1)
@@ -383,6 +476,14 @@ class VoxelArtGrid(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
 
+        # old method
+        #interpolated_densities_va = torch.squeeze(interpolated_densities_va)
+        #interpolated_densities_va = self._density_postactivation(interpolated_densities_va)
+        #interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
+        #interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)
+        #interpolated_densities_va = torch.unsqueeze(interpolated_densities_va, dim=-1)
+
+        # new method
         interpolated_densities_va = torch.squeeze(interpolated_densities_va)
         interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
         interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)

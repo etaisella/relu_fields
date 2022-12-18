@@ -28,12 +28,12 @@ train_and_render() {
 
 # STARTING RUN:
 
-scene=dog2
+scene=lego
 scale_factor=2.0
 num_iterations_per_stage=800
 learning_rate=0.03
 num_stages=3
-train_num_samples_per_ray=256
+train_num_samples_per_ray=320
 gird_dim=32
 num_colors=5
 quantize_colors=True

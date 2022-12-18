@@ -21,6 +21,7 @@ from thre3d_atom.utils.logging import log
 from thre3d_atom.utils.misc import log_config_to_disk
 
 import wandb
+import clip
 from datetime import datetime
 from get_palette import *
 
@@ -33,6 +34,9 @@ torch.multiprocessing.set_start_method("spawn")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# CLIP Setup
+print(f"Available CLiP models - {clip.available_models()}")
+clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
 
 # -------------------------------------------------------------------------------------
 #  Command line configuration for the script                                          |

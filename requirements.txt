@@ -17,3 +17,4 @@ tensorboard==2.9.1
 kmeans-pytorch
 wandb
 datetime
+git+https://github.com/openai/CLIP.git
