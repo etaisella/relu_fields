@@ -29,6 +29,15 @@ class ST_exp(torch.autograd.Function):
     grad = out_reg * grad_output
     return grad, None
 
+class reg_SoftMax(nn.Module):
+  def __init__(self, temperature):
+    super().__init__()
+    self.temp = temperature
+
+  def forward(self, x):
+    result = F.softmax(x * self.temp, dim=-1)
+    return result
+
 class ST_SoftMax(nn.Module):
   def __init__(self, temperature):
     super().__init__()

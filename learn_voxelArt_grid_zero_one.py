@@ -99,11 +99,11 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="factor by which the grid is up-scaled after each stage", show_default=True)
 @click.option("--learning_rate", type=click.FLOAT, required=False, default=0.03,
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
-@click.option("--lr_decay_steps_per_stage", type=click.INT, required=False, default=500,
+@click.option("--lr_decay_steps_per_stage", type=click.INT, required=False, default=100,
               help="number of iterations after which lr is exponentially decayed per stage", show_default=True)
-@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=0.15,
+@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=0.72,
               help="value of gamma for exponential lr_decay (happens per stage)", show_default=True)
-@click.option("--stagewise_lr_decay_gamma", type=click.FLOAT, required=False, default=0.9,
+@click.option("--stagewise_lr_decay_gamma", type=click.FLOAT, required=False, default=1.0,
               help="value of gamma used for reducing the learning rate after each stage", show_default=True)
 @click.option("--apply_diffuse_render_regularization", type=click.BOOL, required=False, default=True,
               help="whether to apply the diffuse render regularization."
@@ -143,6 +143,16 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="a flag to determine whether to use pure argmax instead of heated softmax", show_default=True)
 @click.option("--num_colors", type=click.INT, required=False, default=5,
               help="number of colors in palette", show_default=True)
+@click.option("--sa_start_iter", type=click.INT, required=False, default=-1,
+              help="Iteration in which we start using shift aware loss", show_default=True)              
+@click.option("--sa_init_weight", type=click.FLOAT, required=False, default=0.1,
+              help="Initial weight of shift aware loss in total loss", show_default=True)
+@click.option("--sa_gamma", type=click.FLOAT, required=False, default=1.1,
+              help="Gamma which we raise the shift aware loss by at every interval", show_default=True)
+@click.option("--sa_interval", type=click.INT, required=False, default=100,
+              help="interval in iterations where we raise the SA weight", show_default=True)
+@click.option("--semantic_weight", type=click.FLOAT, required=False, default=0.0,
+              help="Weight of the semantic loss (CLiP)", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -273,6 +283,12 @@ def main(**kwargs) -> None:
         voxel_art_mode=True, # this mode tells it that is a voxelArt grid with no cnn
         temperature_gamma=config.temperature_gamma,
         raise_temperature_iter=config.raise_temperature_iter,
+        sa_init_weight=config.sa_init_weight,
+        sa_gamma=config.sa_gamma,
+        sa_interval=config.sa_interval,
+        sa_start_iter=config.sa_start_iter,
+        clip_model=clip_model,
+        semantic_weight=config.semantic_weight,
     )
 
 

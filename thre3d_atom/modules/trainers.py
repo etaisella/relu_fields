@@ -34,6 +34,7 @@ from thre3d_atom.thre3d_reprs.voxels import (
 from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     VoxelArtGrid,
     sa_loss,
+    clip_semantic_loss,
     scale_zero_one_voxel_grid_with_required_output_size,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
@@ -101,6 +102,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     sa_start_iter: int=-1,
     sa_init_weight: float=0.1,
     sa_gamma: float=0.15,
+    sa_interval: int=100,
+    clip_model = None,
+    semantic_weight: float=0.0,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -137,6 +141,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     """
 
     best_total_loss = INIT_TOTAL_LOSS
+    sa_weight = sa_init_weight
+    specular_weight = 1.0
+    diffuse_weight = 1.0
 
     # fix the sizes of the feature grids at different stages
     stagewise_voxel_grid_sizes = compute_thre3d_grid_sizes(
@@ -302,6 +309,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # sample a batch rays and pixels for a single iteration
             # load a batch of images and poses (These could already be cached on GPU)
             # please check the `data.datasets` module
+            total_loss = 0
+            global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
             images, poses = next(infinite_train_dl)
 
             # cast rays for all the loaded images:
@@ -343,16 +352,31 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             specular_rendered_batch, specular_rendered_batch_va, id_maps = vol_mod.render_rays(rays_batch)
             specular_rendered_pixels_batch = specular_rendered_batch.colour
 
-            # compute loss and perform gradient update
-            # Main, specular loss
-            total_loss = l1_loss(specular_rendered_pixels_batch, pixels_batch)
-
             # ES: Compute Shift-Aware loss:
             shift_aware_loss = sa_loss(specular_rendered_batch_va.colour, pixels_batch, id_maps, im_h, im_w)
             shift_aware_loss_value = shift_aware_loss.item()
 
+            # ES: Compute Semantic loss:
+            if semantic_weight > 0:
+                semantic_loss = clip_semantic_loss(specular_rendered_batch_va.colour, \
+                    pixels_batch, im_h, im_w, clip_model)
+                semantic_loss_value = semantic_loss.item()
+                total_loss = total_loss + semantic_weight * semantic_loss
+            else:
+                semantic_loss_value = 0.0
+
+            if (global_step > sa_start_iter):
+                specular_weight = 1.0 - sa_weight
+                diffuse_weight = specular_weight
+                total_loss = total_loss + shift_aware_loss * sa_weight
+
+            # compute loss and perform gradient update
+            # Main, specular loss
+            specular_loss = l1_loss(specular_rendered_pixels_batch, pixels_batch)
+            total_loss = total_loss + specular_loss * specular_weight
+
             # logging info:
-            specular_loss_value = total_loss.item()
+            specular_loss_value = specular_loss.item()
             specular_psnr_value = mse2psnr(
                 mse_loss(specular_rendered_pixels_batch, pixels_batch)
             )
@@ -361,14 +385,14 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             diffuse_loss_value, diffuse_psnr_value = None, None
             if apply_diffuse_render_regularization:
                 # render only the diffuse version for the rays
-                diffuse_rendered_batch, diffuse_rendered_batch_va, id_maps  = vol_mod.render_rays(
+                diffuse_rendered_batch, _, _  = vol_mod.render_rays(
                     rays_batch, render_diffuse=True
                 )
                 diffuse_rendered_pixels_batch = diffuse_rendered_batch.colour
 
                 # compute diffuse loss
                 diffuse_loss = l1_loss(diffuse_rendered_pixels_batch, pixels_batch)
-                total_loss = total_loss + diffuse_loss
+                total_loss = total_loss + diffuse_loss * diffuse_weight
 
                 # logging info:
                 diffuse_loss_value = diffuse_loss.item()
@@ -385,7 +409,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
             # rest of the code per iteration is related to saving/logging/feedback/testing
             time_spent_actually_training += time.perf_counter() - last_time
-            global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
 
             # wandb logging:
             wandb.log({"current LR" : float(current_stage_lrs[0])}, step=global_step)
@@ -397,6 +420,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"total_loss" : total_loss}, step=global_step)
             wandb.log({"temperature" : vol_mod.thre3d_repr.temperature}, step=global_step)
             wandb.log({"shift aware loss" : shift_aware_loss_value}, step=global_step)
+            wandb.log({"shift aware weight" : sa_weight}, step=global_step)
+            wandb.log({"specular weight" : specular_weight}, step=global_step)
+            wandb.log({"diffuse weight" : diffuse_weight}, step=global_step)
+            wandb.log({"semantic loss" : semantic_loss_value}, step=global_step)
+            wandb.log({"semantic weight" : semantic_weight}, step=global_step)
 
             if global_step % raise_temperature_iter == 0 and global_step >= start_raise_temperature_iter:
                 vol_mod.thre3d_repr.update_temperature(vol_mod.thre3d_repr.temperature * temperature_gamma)
@@ -434,12 +462,13 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"specular_loss: {specular_loss_value: .3f} "
                     f"specular_psnr: {specular_psnr_value.item(): .3f} "
                     f"SA Loss: {shift_aware_loss_value: .3f} "
+                    f"Semantic Loss: {semantic_loss_value: .3f} "
                 )
                 if apply_diffuse_render_regularization:
                     loss_info_string += (
-                        f"diffuse_loss: {diffuse_loss_value: .3f} "
-                        f"diffuse_psnr: {diffuse_psnr_value.item(): .3f} "
-                        f"total_loss: {total_loss: .3f} "
+                        f"diffuse_loss: {float(diffuse_loss_value): .3f} "
+                        f"diffuse_psnr: {float(diffuse_psnr_value.item()): .3f} "
+                        f"total_loss: {float(total_loss): .3f} "
                     )
                 log.info(loss_info_string)
 
@@ -460,8 +489,12 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     model_dir / f"model_best.pth",
                 )
 
+            # step the SA weight scheduler
+            if (global_step > sa_start_iter) and (global_step % sa_interval == 0):
+                sa_weight = sa_weight * sa_gamma
+
             # step the learning rate schedulers
-            if stage_iteration % lr_decay_steps_per_stage == 0:
+            if (stage_iteration % lr_decay_steps_per_stage == 0) and (global_step > sa_start_iter):
                 lr_scheduler.step()
                 new_lrs = [param_group["lr"] for param_group in optimizer.param_groups]
                 log_string = f"Adjusted learning rate | learning rates: {new_lrs} "

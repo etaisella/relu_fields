@@ -42,6 +42,25 @@ train_and_render() {
 
 # STARTING RUN:
 
+scene=dog2
+scale_factor=2.0
+num_iterations_per_stage=800
+learning_rate=0.003
+num_stages=3
+train_num_samples_per_ray=256
+gird_dim=32
+num_colors=5
+quantize_colors=True
+sa_init_weight=0.0
+sa_start_iter=1600
+sa_gamma=1.0
+sa_interval=100
+semantic_weight=0.3
+
+train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
+$train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \
+$sa_gamma $sa_interval $semantic_weight
+
 scene=lego
 scale_factor=2.0
 num_iterations_per_stage=800
@@ -51,11 +70,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.7
+sa_init_weight=0.0
 sa_start_iter=1600
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.0
+semantic_weight=0.3
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \
@@ -70,11 +89,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.7
+sa_init_weight=0.0
 sa_start_iter=1600
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.0
+semantic_weight=0.3
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \
@@ -89,11 +108,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.7
+sa_init_weight=0.0
 sa_start_iter=1600
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.0
+semantic_weight=0.3
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \
@@ -108,11 +127,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.7
+sa_init_weight=0.0
 sa_start_iter=1600
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.0
+semantic_weight=0.3
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \

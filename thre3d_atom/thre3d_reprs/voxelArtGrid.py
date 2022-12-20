@@ -5,9 +5,11 @@ from thre3d_atom.thre3d_reprs.voxels import VoxelGrid
 from thre3d_atom.thre3d_reprs.straightThroughSoftmax import StraightThroughSoftMax, ST_SoftMax
 
 import torch
+from torchvision import transforms
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.functional import grid_sample, interpolate
+from PIL import Image
+from torch.nn.functional import grid_sample, interpolate, normalize
 from thre3d_atom.thre3d_reprs.constants import (
     THRE3D_REPR,
     STATE_DICT,
@@ -45,6 +47,50 @@ import numpy as np
 #####
 
 HIGH_DENSITY = 1000.0
+SOFTMIN_TEMP = 150.0
+
+try:
+    from torchvision.transforms import InterpolationMode
+    BICUBIC = InterpolationMode.BICUBIC
+except ImportError:
+    BICUBIC = Image.BICUBIC
+
+# clip preprocess for tensor
+def clip_transform(n_px):
+    return transforms.Compose([
+        transforms.Resize(n_px, interpolation=BICUBIC),
+        transforms.CenterCrop(n_px),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073), 
+                             (0.26862954, 0.26130258, 0.27577711)),
+    ])
+
+clip_tensor_preprocess = clip_transform(224)
+
+
+def clip_semantic_loss(output: Tensor,
+                       target: Tensor,
+                       image_height: int,
+                       image_width: int,
+                       clip_model):
+    """Caluclates the semantic loss using CLiP"""
+    clip_model.eval()
+
+    # prepare out images
+    out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
+    out_imgs = out_imgs.permute((0, 3, 1, 2))
+    out_imgs = clip_tensor_preprocess(out_imgs)
+    out_features = normalize(clip_model.encode_image(out_imgs))
+
+    # prepare target images
+    target_imgs = torch.reshape(target, (-1, image_height, image_width, 3))
+    target_imgs = target_imgs.permute((0, 3, 1, 2))
+    target_imgs = clip_tensor_preprocess(target_imgs)
+    target_features = normalize(clip_model.encode_image(target_imgs))
+
+    # return cosine distance
+    distances = torch.mean(1. - torch.cosine_similarity(out_features, target_features))
+    return distances
+
 
 def sa_loss(output: Tensor,
             target: Tensor,
@@ -79,11 +125,17 @@ def sa_loss(output: Tensor,
         unique_ids = torch.unique(id_frame)
 
         # 2. Iterate over all unique ids:
+        num_unique_ids = len(unique_ids.tolist())
         for unique_id in unique_ids.tolist():
             diffs_for_voxel = diff_img[id_frame == unique_id]
 
             # 2.a. Add minimum difference:
-            min_diff = torch.min(diffs_for_voxel)
+            if unique_id < 0:
+                softmin_vec = torch.nn.functional.softmax(diffs_for_voxel * SOFTMIN_TEMP, dim=-1)
+            else:
+                softmin_vec = torch.nn.functional.softmin(diffs_for_voxel * SOFTMIN_TEMP, dim=-1)
+
+            min_diff = torch.matmul(softmin_vec, diffs_for_voxel)
             loss_for_frame += min_diff
         
         # 3. Normalize difference by num of unique ids:
