@@ -123,11 +123,12 @@ def sa_loss(output: Tensor,
         # 1.b. Get unique voxel ids:
         id_frame = torch.squeeze(vox_id_img[img_idx])
         unique_ids = torch.unique(id_frame)
+        one_channel_target = torch.matmul(target_frame, torch.ones(3, device=target_frame.device))
+        foreground_mask = (one_channel_target != 3.0)
 
         # 2. Iterate over all unique ids:
-        num_unique_ids = len(unique_ids.tolist())
         for unique_id in unique_ids.tolist():
-            diffs_for_voxel = diff_img[id_frame == unique_id]
+            diffs_for_voxel = diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)]
 
             # 2.a. Add minimum difference:
             if unique_id < 0:
