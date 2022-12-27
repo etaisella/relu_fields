@@ -34,8 +34,10 @@ from thre3d_atom.thre3d_reprs.voxels import (
 from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     VoxelArtGrid,
     sa_loss,
+    structural_loss,
     clip_semantic_loss,
     scale_zero_one_voxel_grid_with_required_output_size,
+    total_variation_loss,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
@@ -105,6 +107,12 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     sa_interval: int=100,
     clip_model = None,
     semantic_weight: float=0.0,
+    tv_weight: float=0.0,
+    l1_weight: float=1.0,
+    accumulation_iters: int=1,
+    clip_prompt: str="none",
+    start_semantic_iter=-1,
+    sl_weight=1.0
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -139,11 +147,15 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         voxel_art_3dcnn_mode: bool to control voxel Art mode, in which we don't use stages
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
-
+    calculate_semantics = False
+    calculate_total_variation = False
+    calculate_shift_aware = False
+    calculate_structure_loss = True
     best_total_loss = INIT_TOTAL_LOSS
     sa_weight = sa_init_weight
-    specular_weight = 1.0
-    diffuse_weight = 1.0
+    specular_weight = l1_weight
+    diffuse_weight = l1_weight
+    current_acumulation_iters = 1
 
     # fix the sizes of the feature grids at different stages
     stagewise_voxel_grid_sizes = compute_thre3d_grid_sizes(
@@ -260,6 +272,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     for stage in range(1, num_stages + 1):
         # setup the dataset for the current training stage
         # followed by creating an infinite training data-loader
+        iterations_per_current_stage = num_iterations_per_stage
         current_stage_train_dataset = stagewise_train_datasets[stage - 1]
         train_dl = _make_dataloader_from_dataset(
             current_stage_train_dataset, image_batch_cache_size, num_workers
@@ -268,6 +281,41 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
         # setup volumetric_model's optimizer
         current_stage_lr = learning_rate * (stagewise_lr_decay_gamma ** (stage - 1))
+
+        ## ES: Enable semantics at last stage:
+        if stage == num_stages:
+            current_acumulation_iters = accumulation_iters
+
+            if semantic_weight != 0.0:
+                iterations_per_current_stage = num_iterations_per_stage * 2
+                #calculate_semantics = True
+                ## ES (TODO): Remove later! this is for experimentation purposes only
+                #tv_weight = 0.0
+                #sa_weight = 0.0
+                #diffuse_weight = 0.0
+                #specular_weight = 0.0
+
+            ## ES: Enable TV at last stage:
+            if tv_weight != 0.0:
+                calculate_total_variation = True
+                # ES (TODO): Remove later! this is for experimentation purposes only
+                tv_weight = 1.0
+                semantic_weight = 0.0
+                sa_weight = 0.0
+                diffuse_weight = 0.0
+                specular_weight = 0.0
+
+            ## ES: Enable SA at last stage:
+            if sa_weight != 0.0:
+                #calculate_shift_aware = True
+                iterations_per_current_stage = num_iterations_per_stage * 2
+                # ES (TODO): Remove later! this is for experimentation purposes only
+                #tv_weight = 0.0
+                #semantic_weight = 0.0
+                #vol_mod.thre3d_repr._features = torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
+                #diffuse_weight = 0.0
+                #specular_weight = 0.0 
+
         optimizeable_parameters = vol_mod.thre3d_repr.parameters()
         assert (
             optimizeable_parameters
@@ -302,7 +350,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         # -------------------------------------------------------------------------------------
         #  Single Stage Training Loop                                                         |
         # -------------------------------------------------------------------------------------
-        for stage_iteration in range(1, num_iterations_per_stage + 1):
+        for stage_iteration in range(1, iterations_per_current_stage + 1):
             # ---------------------------------------------------------------------------------
             #  Main Operations Performed Per Iteration                                        |
             # ---------------------------------------------------------------------------------
@@ -312,6 +360,40 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             total_loss = 0
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
             images, poses = next(infinite_train_dl)
+
+            # ES: Compute Shift-Aware loss:
+            if global_step == sa_start_iter:
+                calculate_shift_aware = True
+                diffuse_weight = 0.0
+                specular_weight = 0.0
+                sl_weight = 0.0
+                vol_mod.thre3d_repr._features = \
+                    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
+                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                assert (
+                    optimizeable_parameters
+                ), f"No optimizeable parameters :(. Nothing will happen"
+                optimizer = torch.optim.Adam(
+                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                    betas=(0.9, 0.999),
+                )
+            
+            # ES: Compute Shift-Aware loss:
+            if global_step == start_semantic_iter:
+                calculate_semantics = True
+                diffuse_weight = 0.0
+                specular_weight = 0.0
+                sl_weight = 0.0
+                #vol_mod.thre3d_repr._features = \
+                #    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
+                #optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                #assert (
+                #    optimizeable_parameters
+                #), f"No optimizeable parameters :(. Nothing will happen"
+                #optimizer = torch.optim.Adam(
+                #    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                #    betas=(0.9, 0.999),
+                #)
 
             # cast rays for all the loaded images:
             rays_list = []
@@ -352,23 +434,50 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             specular_rendered_batch, specular_rendered_batch_va, id_maps = vol_mod.render_rays(rays_batch)
             specular_rendered_pixels_batch = specular_rendered_batch.colour
 
-            # ES: Compute Shift-Aware loss:
-            shift_aware_loss = sa_loss(specular_rendered_batch_va.colour, pixels_batch, id_maps, im_h, im_w)
-            shift_aware_loss_value = shift_aware_loss.item()
+            pva_image = vol_mod._thre3d_repr.get_psuedo_voxelArt_img(id_maps)
+
+            if calculate_structure_loss:
+                structure_loss = structural_loss(specular_rendered_batch_va.colour,
+                                                 pixels_batch,
+                                                 id_maps,
+                                                 im_h, im_w,
+                                                 render_dir,
+                                                 global_step)
+                structural_loss_value = structure_loss.item()
+                total_loss = total_loss + structure_loss * sl_weight
+            else:
+                shift_aware_loss_value = 0.0
+
+            if calculate_shift_aware:
+                shift_aware_loss = sa_loss(specular_rendered_batch_va.colour, 
+                                           pixels_batch, 
+                                           id_maps,
+                                           im_h, im_w,
+                                           render_dir, 
+                                           global_step)
+                shift_aware_loss_value = shift_aware_loss.item()
+                total_loss = total_loss + shift_aware_loss * sa_init_weight
+            else:
+                shift_aware_loss_value = 0.0
 
             # ES: Compute Semantic loss:
-            if semantic_weight > 0:
+            if calculate_semantics:
                 semantic_loss = clip_semantic_loss(specular_rendered_batch_va.colour, \
-                    pixels_batch, im_h, im_w, clip_model)
+                    pixels_batch, im_h, im_w, clip_model, clip_prompt)
                 semantic_loss_value = semantic_loss.item()
                 total_loss = total_loss + semantic_weight * semantic_loss
             else:
                 semantic_loss_value = 0.0
 
-            if (global_step > sa_start_iter):
-                specular_weight = 1.0 - sa_weight
-                diffuse_weight = specular_weight
-                total_loss = total_loss + shift_aware_loss * sa_weight
+            # ES: Compute TV:
+            
+            if calculate_total_variation:
+                tv_loss = total_variation_loss(specular_rendered_batch_va.colour, \
+                    im_h, im_w, render_dir, global_step)
+                tv_loss_value = tv_loss.item()
+                total_loss = total_loss + tv_weight * tv_loss
+            else:
+                tv_loss_value = 0
 
             # compute loss and perform gradient update
             # Main, specular loss
@@ -400,18 +509,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     mse_loss(diffuse_rendered_pixels_batch, pixels_batch)
                 )
 
-            # optimization steps:
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-            torch.cuda.empty_cache()
-            # ---------------------------------------------------------------------------------
-
-            # rest of the code per iteration is related to saving/logging/feedback/testing
-            time_spent_actually_training += time.perf_counter() - last_time
-
             # wandb logging:
-            wandb.log({"current LR" : float(current_stage_lrs[0])}, step=global_step)
+            lrs = [param_group["lr"] for param_group in optimizer.param_groups]
+            wandb.log({"current LR" : float(lrs[0])}, step=global_step)
             wandb.log({"training stage" : stage}, step=global_step)
             wandb.log({"specular_loss" : specular_loss_value}, step=global_step)
             wandb.log({"diffuse_loss" : diffuse_loss_value}, step=global_step)
@@ -425,6 +525,24 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"diffuse weight" : diffuse_weight}, step=global_step)
             wandb.log({"semantic loss" : semantic_loss_value}, step=global_step)
             wandb.log({"semantic weight" : semantic_weight}, step=global_step)
+            wandb.log({"TV loss" : tv_loss_value}, step=global_step)
+            wandb.log({"TV weight" : tv_weight}, step=global_step)
+            wandb.log({"structural loss" : structural_loss_value}, step=global_step)
+
+            # optimization steps:
+            # ES: Adding Gradiant accumulation
+            total_loss = total_loss / current_acumulation_iters
+            total_loss.backward()
+            
+            if ((global_step + 1) % current_acumulation_iters == 0) or (global_step + 1 == num_iterations_per_stage):
+                optimizer.step()
+                optimizer.zero_grad()
+            
+            #torch.cuda.empty_cache()
+            # ---------------------------------------------------------------------------------
+
+            # rest of the code per iteration is related to saving/logging/feedback/testing
+            time_spent_actually_training += time.perf_counter() - last_time
 
             if global_step % raise_temperature_iter == 0 and global_step >= start_raise_temperature_iter:
                 vol_mod.thre3d_repr.update_temperature(vol_mod.thre3d_repr.temperature * temperature_gamma)
@@ -441,7 +559,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     ("diffuse_loss", diffuse_loss_value),
                     ("specular_psnr", specular_psnr_value),
                     ("diffuse_psnr", diffuse_psnr_value),
-                    ("total_loss", total_loss),
+                    ("total_loss", total_loss * current_acumulation_iters),
                     ("num_epochs", (ray_batch_size * global_step) / dataset_size),
                 ):
                     if summary_value is not None:
@@ -462,13 +580,14 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"specular_loss: {specular_loss_value: .3f} "
                     f"specular_psnr: {specular_psnr_value.item(): .3f} "
                     f"SA Loss: {shift_aware_loss_value: .3f} "
+                    f"SL Loss: {structural_loss_value: .3f} "
                     f"Semantic Loss: {semantic_loss_value: .3f} "
                 )
                 if apply_diffuse_render_regularization:
                     loss_info_string += (
                         f"diffuse_loss: {float(diffuse_loss_value): .3f} "
                         f"diffuse_psnr: {float(diffuse_psnr_value.item()): .3f} "
-                        f"total_loss: {float(total_loss): .3f} "
+                        f"total_loss: {float(total_loss * current_acumulation_iters): .3f} "
                     )
                 log.info(loss_info_string)
 

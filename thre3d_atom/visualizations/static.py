@@ -215,6 +215,7 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
             render_diffuse=True,
             num_samples_per_ray=overridden_num_samples_per_ray_for_beautiful_renders,
         )
+        
         diffuse_feedback_image = _process_rendered_output_for_feedback_log(
             diffuse_rendered_output, vol_mod.render_config.camera_bounds, training_time
         )

@@ -93,7 +93,7 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="number of samples taken per ray during training", show_default=True)
 @click.option("--num_stages", type=click.INT, required=False, default=3,
               help="number of progressive growing stages used in training", show_default=True)
-@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=1000,
+@click.option("--num_iterations_per_stage", type=click.INT, required=False, default=800,
               help="number of training iterations performed per stage", show_default=True)
 @click.option("--scale_factor", type=click.FLOAT, required=False, default=2.0,
               help="factor by which the grid is up-scaled after each stage", show_default=True)
@@ -101,7 +101,7 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="learning rate used at the beginning (ADAM OPTIMIZER)", show_default=True)
 @click.option("--lr_decay_steps_per_stage", type=click.INT, required=False, default=100,
               help="number of iterations after which lr is exponentially decayed per stage", show_default=True)
-@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=0.72,
+@click.option("--lr_decay_gamma_per_stage", type=click.FLOAT, required=False, default=1.0,
               help="value of gamma for exponential lr_decay (happens per stage)", show_default=True)
 @click.option("--stagewise_lr_decay_gamma", type=click.FLOAT, required=False, default=1.0,
               help="value of gamma used for reducing the learning rate after each stage", show_default=True)
@@ -145,19 +145,33 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="number of colors in palette", show_default=True)
 @click.option("--sa_start_iter", type=click.INT, required=False, default=-1,
               help="Iteration in which we start using shift aware loss", show_default=True)              
-@click.option("--sa_init_weight", type=click.FLOAT, required=False, default=0.1,
+@click.option("--sa_init_weight", type=click.FLOAT, required=False, default=0.0,
               help="Initial weight of shift aware loss in total loss", show_default=True)
-@click.option("--sa_gamma", type=click.FLOAT, required=False, default=1.1,
+@click.option("--sa_gamma", type=click.FLOAT, required=False, default=1.0,
               help="Gamma which we raise the shift aware loss by at every interval", show_default=True)
 @click.option("--sa_interval", type=click.INT, required=False, default=100,
               help="interval in iterations where we raise the SA weight", show_default=True)
 @click.option("--semantic_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight of the semantic loss (CLiP)", show_default=True)
+@click.option("--accumulation_iters", type=click.INT, required=False, default=16,
+              help="iterations before optimization step", show_default=True)
+@click.option("--clip_prompt", type=click.STRING, required=False, default="none",
+              help="prompt used for semantic loss (temporary)", show_default=True)
+@click.option("--start_semantic_iter", type=click.INT, required=False, default=-1,
+              help="iteration where we start using semantic loss", show_default=True)
+@click.option("--sl_weight", type=click.FLOAT, required=False, default=0.0,
+              help="Weight for structural loss", show_default=True)
+
 
 # fmt: on
 # -------------------------------------------------------------------------------------
 def main(**kwargs) -> None:
     # load the requested configuration for the training
+
+    print("Freezing CLiP Parameters:")
+    for parameter in clip_model.parameters():
+        parameter.requires_grad = False
+
     config = EasyDict(kwargs)
 
     wandb.init(project='VoxelArtReluFields', entity="etaisella",
@@ -289,6 +303,10 @@ def main(**kwargs) -> None:
         sa_start_iter=config.sa_start_iter,
         clip_model=clip_model,
         semantic_weight=config.semantic_weight,
+        accumulation_iters=config.accumulation_iters,
+        clip_prompt=config.clip_prompt,
+        start_semantic_iter=config.start_semantic_iter,
+        sl_weight=config.sl_weight
     )
 
 
