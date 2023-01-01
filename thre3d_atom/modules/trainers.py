@@ -38,6 +38,7 @@ from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     clip_semantic_loss,
     scale_zero_one_voxel_grid_with_required_output_size,
     total_variation_loss,
+    sparsity_loss,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
@@ -150,7 +151,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     calculate_semantics = False
     calculate_total_variation = False
     calculate_shift_aware = False
-    calculate_structure_loss = True
+    calculate_structure_loss = False
     best_total_loss = INIT_TOTAL_LOSS
     sa_weight = sa_init_weight
     specular_weight = l1_weight
@@ -307,14 +308,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
             ## ES: Enable SA at last stage:
             if sa_weight != 0.0:
-                #calculate_shift_aware = True
                 iterations_per_current_stage = num_iterations_per_stage * 2
-                # ES (TODO): Remove later! this is for experimentation purposes only
-                #tv_weight = 0.0
-                #semantic_weight = 0.0
-                #vol_mod.thre3d_repr._features = torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
-                #diffuse_weight = 0.0
-                #specular_weight = 0.0 
 
         optimizeable_parameters = vol_mod.thre3d_repr.parameters()
         assert (
@@ -367,16 +361,17 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 diffuse_weight = 0.0
                 specular_weight = 0.0
                 sl_weight = 0.0
-                vol_mod.thre3d_repr._features = \
-                    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
-                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
-                assert (
-                    optimizeable_parameters
-                ), f"No optimizeable parameters :(. Nothing will happen"
-                optimizer = torch.optim.Adam(
-                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
-                    betas=(0.9, 0.999),
-                )
+
+                #vol_mod.thre3d_repr._features = \
+                #    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
+                #optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                #assert (
+                #    optimizeable_parameters
+                #), f"No optimizeable parameters :(. Nothing will happen"
+                #optimizer = torch.optim.Adam(
+                #    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                #    betas=(0.9, 0.999),
+                #)
             
             # ES: Compute Shift-Aware loss:
             if global_step == start_semantic_iter:
@@ -437,19 +432,20 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             pva_image = vol_mod._thre3d_repr.get_psuedo_voxelArt_img(id_maps)
 
             if calculate_structure_loss:
-                structure_loss = structural_loss(specular_rendered_batch_va.colour,
-                                                 pixels_batch,
-                                                 id_maps,
-                                                 im_h, im_w,
-                                                 render_dir,
-                                                 global_step)
+                structure_loss = sparsity_loss(vol_mod.thre3d_repr._features)
+                #structure_loss = structural_loss(specular_rendered_batch_va.colour,
+                #                                 pixels_batch,
+                #                                 id_maps,
+                #                                 im_h, im_w,
+                #                                 render_dir,
+                #                                 global_step)
                 structural_loss_value = structure_loss.item()
                 total_loss = total_loss + structure_loss * sl_weight
             else:
-                shift_aware_loss_value = 0.0
+                structural_loss_value = 0.0
 
             if calculate_shift_aware:
-                shift_aware_loss = sa_loss(specular_rendered_batch_va.colour, 
+                shift_aware_loss = sa_loss(pva_image, 
                                            pixels_batch, 
                                            id_maps,
                                            im_h, im_w,

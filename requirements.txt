@@ -18,3 +18,4 @@ kmeans-pytorch
 wandb
 datetime
 git+https://github.com/openai/CLIP.git
+git+https://github.com/etaisella/fastLayerDecomposition.git

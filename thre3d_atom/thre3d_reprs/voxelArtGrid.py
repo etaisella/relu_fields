@@ -110,6 +110,13 @@ def save_sl_outputs(out_image: Tensor,
     wandb.log({"SL Outputs": wandb.Image(plt)}, step=global_step)
 
 
+def sparsity_loss(features: Tensor):
+    weights = torch.nn.functional.softmax(features, dim=-1)
+    loss_tensor = (torch.sum(weights, dim=-1) / torch.sum((weights * weights), dim=-1)) - 1.0
+    loss = torch.mean(loss_tensor)
+    return loss
+
+
 def structural_loss(output: Tensor,
             target: Tensor,
             voxel_ids: Tensor,
@@ -226,37 +233,19 @@ def sa_loss(output: Tensor,
         for unique_id in unique_ids.tolist():
             if unique_id < 0:
                 continue
+
             diffs_for_voxel = diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)]
             if torch.numel(diffs_for_voxel) == 0:
                 continue
-            # 2.a. Add minimum difference:
-            #if unique_id < 0:
-            #    softmin_vec = torch.nn.functional.softmax(diffs_for_voxel * SOFTMIN_TEMP, dim=-1)
-            #else:
-            #    softmin_vec = torch.nn.functional.softmin(diffs_for_voxel * SOFTMIN_TEMP, dim=-1)
-            #softmin_vec = torch.nn.functional.softmin(diffs_for_voxel * SOFTMIN_TEMP, dim=-1)
-            #min_diff = torch.matmul(softmin_vec, diffs_for_voxel)
+
             min_diff = torch.min(diffs_for_voxel.flatten())
             min_diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)] = min_diff
-            #loss_for_frame += min_diff
-        
-        #pixels_in_empty_voxels = torch.logical_and(foreground_mask, \
-        #    (id_frame < 0.0).to(device))
-        #min_diff_img[pixels_in_empty_voxels] = diff_img[pixels_in_empty_voxels]
-        #loss_for_frame = torch.mean(min_diff_img)
-        # 3. Normalize difference by num of unique ids:
-        #loss_for_frame = loss_for_frame / unique_ids.shape[0]
         
         # 4. Add to overall loss:
         loss_for_frame = torch.mean(min_diff_img)
         overall_sa_loss = overall_sa_loss + loss_for_frame
-    
-        # 5. Penalize empty voxels in foreground:
-        #pixels_in_empty_voxels = torch.logical_and(foreground_mask, \
-        #    (id_frame < 0.0).to(device))
-        #overall_sa_loss += torch.sum(pixels_in_empty_voxels) / EMPTY_SPACE_FACTOR
 
-        # 6. Save debug outputs if debug mode is active:
+        # 5. Save debug outputs if debug mode is active:
         if debug_mode and img_idx == 0:
             if global_step % SAVE_OUTPUTS_INTERVAL == 0:
                 save_sa_ouputs(out_frame, diff_img, min_diff_img, output_path, global_step)
@@ -680,7 +669,7 @@ class VoxelArtGrid(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
 
-        interpolated_densities_va = torch.squeeze(interpolated_densities_va)
+        interpolated_densities_va = torch.squeeze(interpolated_densities_va).detach()
         interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
         interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)
         interpolated_densities_va = self._density_postactivation(interpolated_densities_va)

@@ -153,7 +153,7 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="interval in iterations where we raise the SA weight", show_default=True)
 @click.option("--semantic_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight of the semantic loss (CLiP)", show_default=True)
-@click.option("--accumulation_iters", type=click.INT, required=False, default=16,
+@click.option("--accumulation_iters", type=click.INT, required=False, default=1,
               help="iterations before optimization step", show_default=True)
 @click.option("--clip_prompt", type=click.STRING, required=False, default="none",
               help="prompt used for semantic loss (temporary)", show_default=True)
