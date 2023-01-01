@@ -161,6 +161,8 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="iteration where we start using semantic loss", show_default=True)
 @click.option("--sl_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight for structural loss", show_default=True)
+@click.option("--convex_hull_extraction", type=click.BOOL, required=False, default=False,
+              help="Use fastLayerDecomposition for palette extraction", show_default=True)
 
 
 # fmt: on
@@ -201,7 +203,11 @@ def main(**kwargs) -> None:
     # get palette here
     print("Calculating Palette - be patient!")
     concat_image = concatenate_images(data_path/"train")
-    palette = get_palette(concat_image, config.num_colors)
+    if config.convex_hull_extraction:
+        palette, num_colors = get_palette_convex_hull(concat_image)
+    else:
+        palette = get_palette(concat_image, config.num_colors)
+        num_colors = config.num_colors
     wandb.log({"palette": wandb.Image(torch.unsqueeze(torch.permute(palette, (1, 0)), dim=-2))}, step=0)
 
     # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
@@ -238,7 +244,7 @@ def main(**kwargs) -> None:
     # fmt: off
     densities = torch.empty((*config.grid_dims, 2), dtype=torch.float32, device=device)
     torch.nn.init.uniform_(densities, -1.0, 1.0)
-    features = torch.empty((*config.grid_dims, config.num_colors), dtype=torch.float32, device=device)
+    features = torch.empty((*config.grid_dims, num_colors), dtype=torch.float32, device=device)
 
 
     torch.nn.init.uniform_(features, -1.0, 1.0)
@@ -252,7 +258,7 @@ def main(**kwargs) -> None:
         **vox_grid_density_activations_dict,
         tunable=True,
         palette=palette,
-        num_colors=config.num_colors,
+        num_colors=num_colors,
         use_pure_argmax=config.use_pure_argmax
     )
     # fmt: on

@@ -3,11 +3,32 @@ import matplotlib as plt
 import numpy as np
 import torch
 from torchvision import transforms
+import sys
+# setting path
+from fastLayerDecomposition.Additive_mixing_layers_extraction import Hull_Simplification_determined_version
+import time
 import cv2
 import os
 
 to_PIL = transforms.ToPILImage()
 to_tensor = transforms.ToTensor()
+
+def get_palette_convex_hull(concatenated_image):
+    # takes a concatenated image of the dataset as input and returns the color palette
+    start=time.time()
+    concatenated_image_normed = concatenated_image / 255.0
+    palette_rgb = Hull_Simplification_determined_version(concatenated_image_normed, \
+        "convexhull_vertices") * 255.0
+    end=time.time()    
+    M=len(palette_rgb)
+    print("palette size: ", M)
+    print("palette extraction time: ", end-start)
+    palette_rgb = palette_rgb.reshape((1, -1, 3)).astype(np.float32)
+    palette_rgb = cv2.cvtColor(palette_rgb, cv2.COLOR_BGR2RGB)
+    palette_rgb_pil = Image.fromarray(palette_rgb.astype(np.uint8))
+    t_palette_rgb = to_tensor(palette_rgb_pil)
+    t_palette_rgb = torch.squeeze(torch.permute(t_palette_rgb, (2, 1, 0)))
+    return t_palette_rgb, M
 
 def get_palette(concatenated_image, num_clusters):
     # takes a concatenated image of the dataset as input and returns the color palette

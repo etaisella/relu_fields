@@ -17,5 +17,10 @@ tensorboard==2.9.1
 kmeans-pytorch
 wandb
 datetime
+scipy
+cython
+pyopencl
+websockets
+cvxopt
+numpy
 git+https://github.com/openai/CLIP.git
-git+https://github.com/etaisella/fastLayerDecomposition.git

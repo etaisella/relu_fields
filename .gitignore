@@ -138,6 +138,8 @@ dmypy.json
 logs/
 
 # ETAI ADDITIONS:
+*.js
+*.obj
 *.save
 *.zip
 *.pt
