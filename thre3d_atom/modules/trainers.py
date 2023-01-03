@@ -39,6 +39,7 @@ from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     scale_zero_one_voxel_grid_with_required_output_size,
     total_variation_loss,
     sparsity_loss,
+    clipDirectionalLoss
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
@@ -113,7 +114,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     accumulation_iters: int=1,
     clip_prompt: str="none",
     start_semantic_iter=-1,
-    sl_weight=1.0
+    sl_weight=1.0,
+    directional_weight=0.0
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -157,6 +159,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     specular_weight = l1_weight
     diffuse_weight = l1_weight
     current_acumulation_iters = 1
+    device=vol_mod.device
 
     # fix the sizes of the feature grids at different stages
     stagewise_voxel_grid_sizes = compute_thre3d_grid_sizes(
@@ -164,6 +167,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         num_stages=num_stages,
         scale_factor=scale_factor,
     )
+
+    # set up directional loss
+    dir_loss = clipDirectionalLoss(clip_model, device)
 
     # create downsampled versions of the train_dataset for lower training stages
     stagewise_train_datasets = [train_dataset]
@@ -283,31 +289,11 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         # setup volumetric_model's optimizer
         current_stage_lr = learning_rate * (stagewise_lr_decay_gamma ** (stage - 1))
 
-        ## ES: Enable semantics at last stage:
+        ## ES: Do extra iterations in the last stage if you use some interesting loss:
         if stage == num_stages:
             current_acumulation_iters = accumulation_iters
 
-            if semantic_weight != 0.0:
-                iterations_per_current_stage = num_iterations_per_stage * 2
-                #calculate_semantics = True
-                ## ES (TODO): Remove later! this is for experimentation purposes only
-                #tv_weight = 0.0
-                #sa_weight = 0.0
-                #diffuse_weight = 0.0
-                #specular_weight = 0.0
-
-            ## ES: Enable TV at last stage:
-            if tv_weight != 0.0:
-                calculate_total_variation = True
-                # ES (TODO): Remove later! this is for experimentation purposes only
-                tv_weight = 1.0
-                semantic_weight = 0.0
-                sa_weight = 0.0
-                diffuse_weight = 0.0
-                specular_weight = 0.0
-
-            ## ES: Enable SA at last stage:
-            if sa_weight != 0.0:
+            if semantic_weight != 0.0 or sa_weight != 0 or directional_weight != 0:
                 iterations_per_current_stage = num_iterations_per_stage * 2
 
         optimizeable_parameters = vol_mod.thre3d_repr.parameters()
@@ -376,9 +362,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # ES: Compute Shift-Aware loss:
             if global_step == start_semantic_iter:
                 calculate_semantics = True
-                diffuse_weight = 0.0
-                specular_weight = 0.0
-                sl_weight = 0.0
                 #vol_mod.thre3d_repr._features = \
                 #    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
                 #optimizeable_parameters = vol_mod.thre3d_repr.parameters()
@@ -457,16 +440,24 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 shift_aware_loss_value = 0.0
 
             # ES: Compute Semantic loss:
-            if calculate_semantics:
-                semantic_loss = clip_semantic_loss(specular_rendered_batch_va.colour, \
+            if calculate_semantics and semantic_weight != 0.0:
+                semantic_loss = clip_semantic_loss(pva_image, \
                     pixels_batch, im_h, im_w, clip_model, clip_prompt)
                 semantic_loss_value = semantic_loss.item()
                 total_loss = total_loss + semantic_weight * semantic_loss
             else:
                 semantic_loss_value = 0.0
 
+            # ES: Compute Directional loss:
+            if calculate_semantics and directional_weight != 0.0:
+                directional_loss = dir_loss(pva_image, \
+                    pixels_batch, im_h, im_w)
+                directional_loss_value = directional_loss.item()
+                total_loss = total_loss + directional_weight * directional_loss
+            else:
+                directional_loss_value = 0.0
+
             # ES: Compute TV:
-            
             if calculate_total_variation:
                 tv_loss = total_variation_loss(specular_rendered_batch_va.colour, \
                     im_h, im_w, render_dir, global_step)
@@ -524,6 +515,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"TV loss" : tv_loss_value}, step=global_step)
             wandb.log({"TV weight" : tv_weight}, step=global_step)
             wandb.log({"structural loss" : structural_loss_value}, step=global_step)
+            wandb.log({"directional loss" : directional_loss_value}, step=global_step)
 
             # optimization steps:
             # ES: Adding Gradiant accumulation
@@ -578,6 +570,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"SA Loss: {shift_aware_loss_value: .3f} "
                     f"SL Loss: {structural_loss_value: .3f} "
                     f"Semantic Loss: {semantic_loss_value: .3f} "
+                    f"Directional Loss: {directional_loss_value: .3f} "
                 )
                 if apply_diffuse_render_regularization:
                     loss_info_string += (

@@ -163,7 +163,8 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="Weight for structural loss", show_default=True)
 @click.option("--convex_hull_extraction", type=click.BOOL, required=False, default=False,
               help="Use fastLayerDecomposition for palette extraction", show_default=True)
-
+@click.option("--directional_weight", type=click.FLOAT, required=False, default=0.0,
+              help="Weight for directional loss", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -312,7 +313,8 @@ def main(**kwargs) -> None:
         accumulation_iters=config.accumulation_iters,
         clip_prompt=config.clip_prompt,
         start_semantic_iter=config.start_semantic_iter,
-        sl_weight=config.sl_weight
+        sl_weight=config.sl_weight,
+        directional_weight=config.directional_weight
     )
 
 

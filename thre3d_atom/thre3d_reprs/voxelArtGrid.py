@@ -53,6 +53,50 @@ def clip_transform(n_px):
 
 clip_tensor_preprocess = clip_transform(224)
 
+class clipDirectionalLoss(Module):
+    def __init__(self, 
+                 clip_model,
+                 device):
+        super().__init__()
+
+        # save members
+        self.clip_model = clip_model
+        self.device = device
+
+        # calculate text features
+        va_text = clip.tokenize("voxel art").to(device)
+        self.va_text_features = self.clip_model.encode_text(va_text).detach()
+        self.va_text_features /= self.va_text_features.norm(dim=-1, keepdim=True)
+        ref_text = clip.tokenize("3d model").to(device)
+        self.ref_text_features = self.clip_model.encode_text(ref_text).detach()
+        self.ref_text_features /= self.ref_text_features.norm(dim=-1, keepdim=True)
+
+
+    def forward(self,
+                output: Tensor,
+                target: Tensor,
+                image_height: int,
+                image_width: int):
+        """Caluclates the semantic directional loss using CLiP"""
+
+        # prepare out images:
+        out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
+        out_imgs = out_imgs.permute((0, 3, 1, 2))
+        out_imgs = clip_tensor_preprocess(out_imgs)
+        out_features = normalize(self.clip_model.encode_image(out_imgs))
+
+        # prepare target images:
+        target_imgs = torch.reshape(target, (-1, image_height, image_width, 3)).detach()
+        target_imgs = target_imgs.permute((0, 3, 1, 2))
+        target_imgs = clip_tensor_preprocess(target_imgs)
+        target_features = normalize(self.clip_model.encode_image(target_imgs))
+
+        # calculate similarity:
+        similarity = torch.cosine_similarity(self.va_text_features - self.ref_text_features, \
+                  out_features - target_features)
+        loss = torch.mean(1.0 - similarity)
+        return loss
+
 
 def clip_semantic_loss(output: Tensor,
                        target: Tensor,
@@ -238,7 +282,8 @@ def sa_loss(output: Tensor,
             if torch.numel(diffs_for_voxel) == 0:
                 continue
 
-            min_diff = torch.min(diffs_for_voxel.flatten())
+            #min_diff = torch.min(diffs_for_voxel.flatten())
+            min_diff = torch.quantile(diffs_for_voxel.flatten(), 0.1, interpolation='lower')
             min_diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)] = min_diff
         
         # 4. Add to overall loss:

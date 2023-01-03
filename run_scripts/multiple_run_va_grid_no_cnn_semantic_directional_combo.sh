@@ -20,7 +20,7 @@ train_and_render() {
 	# Train:
 	echo "Starting Training..."
 	python learn_voxelArt_grid_zero_one.py -d data/${1}/ \
-	-o logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_pva_im2im/ \
+	-o logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_on_vox/ \
 	--grid_dims=${7} ${7} ${7} \
 	--learning_rate=$4 \
 	--num_stages=$5 \
@@ -35,47 +35,41 @@ train_and_render() {
 	# Render Video
 	echo "Starting Rendering Voxelized..."
 	python render_sh_based_voxel_grid.py -d data/${1}/ \
-	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_pva_im2im/saved_models/model_final.pth \
-	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_pva_im2im/final/
-
-	# Render Video
-	echo "Starting Rendering Voxelized..."
-	python render_sh_based_voxel_grid.py -d data/${1}/ \
-	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_pva_im2im/saved_models/model_stage_3_iter_2400.pth \
-	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_pva_im2im/pre_sem/
+	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_on_vox/saved_models/model_final.pth \
+	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sem_${10}_on_vox/ 
 }
 
 # STARTING RUN:
 
-scene=robot
+scene=dog2
 scale_factor=2.0
 num_iterations_per_stage=800
-learning_rate=0.03
+learning_rate=0.01
 num_stages=3
 train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
 semantic_weight=1.0
-start_semantic_iter=2401
-clip_prompt="none"
+start_semantic_iter=2200
+clip_prompt="a 3d model of a cute gray dog"
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $semantic_weight $start_semantic_iter \
 $clip_prompt
 
-scene=frog
+scene=lego
 scale_factor=2.0
 num_iterations_per_stage=800
-learning_rate=0.03
+learning_rate=0.01
 num_stages=3
 train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
 semantic_weight=1.0
-start_semantic_iter=2401
-clip_prompt="none"
+start_semantic_iter=2200
+clip_prompt="a 3d model of a yellow bulldozer"
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $semantic_weight $start_semantic_iter \
@@ -84,15 +78,15 @@ $clip_prompt
 scene=hotdog
 scale_factor=2.0
 num_iterations_per_stage=800
-learning_rate=0.03
+learning_rate=0.01
 num_stages=3
 train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
 semantic_weight=1.0
-start_semantic_iter=2401
-clip_prompt="none"
+start_semantic_iter=2200
+clip_prompt="a 3d rendering of two hotdogs on a plate"
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
 $train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $semantic_weight $start_semantic_iter \
