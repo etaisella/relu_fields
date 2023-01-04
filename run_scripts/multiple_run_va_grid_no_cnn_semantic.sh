@@ -56,7 +56,7 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-semantic_weight=1.0
+semantic_weight=0.1
 start_semantic_iter=2401
 clip_prompt="none"
 
@@ -73,7 +73,7 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-semantic_weight=1.0
+semantic_weight=0.1
 start_semantic_iter=2401
 clip_prompt="none"
 
@@ -90,7 +90,7 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-semantic_weight=1.0
+semantic_weight=0.1
 start_semantic_iter=2401
 clip_prompt="none"
 

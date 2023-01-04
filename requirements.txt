@@ -23,4 +23,6 @@ pyopencl
 websockets
 cvxopt
 numpy
+GPUtil
+opencv-python
 git+https://github.com/openai/CLIP.git
