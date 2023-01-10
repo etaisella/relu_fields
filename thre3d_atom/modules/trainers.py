@@ -107,6 +107,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     sa_init_weight: float=0.1,
     sa_gamma: float=0.15,
     sa_interval: int=100,
+    sa_percentile: float=0.1,
     clip_model = None,
     semantic_weight: float=0.0,
     tv_weight: float=0.0,
@@ -346,32 +347,23 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 calculate_shift_aware = True
                 diffuse_weight = 0.0
                 specular_weight = 0.0
-                sl_weight = 0.0
+                vol_mod.thre3d_repr._densities.requires_grad = False
+                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                optimizer = torch.optim.Adam(
+                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                    betas=(0.9, 0.999),
+                )
 
-                #vol_mod.thre3d_repr._features = \
-                #    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
-                #optimizeable_parameters = vol_mod.thre3d_repr.parameters()
-                #assert (
-                #    optimizeable_parameters
-                #), f"No optimizeable parameters :(. Nothing will happen"
-                #optimizer = torch.optim.Adam(
-                #    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
-                #    betas=(0.9, 0.999),
-                #)
             
             # ES: Compute Shift-Aware loss:
             if global_step == start_semantic_iter:
                 calculate_semantics = True
-                #vol_mod.thre3d_repr._features = \
-                #    torch.nn.Parameter(torch.randn_like(vol_mod.thre3d_repr._features, device="cuda"))
-                #optimizeable_parameters = vol_mod.thre3d_repr.parameters()
-                #assert (
-                #    optimizeable_parameters
-                #), f"No optimizeable parameters :(. Nothing will happen"
-                #optimizer = torch.optim.Adam(
-                #    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
-                #    betas=(0.9, 0.999),
-                #)
+                vol_mod.thre3d_repr._densities.requires_grad = False
+                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                optimizer = torch.optim.Adam(
+                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                    betas=(0.9, 0.999),
+                )
 
             # cast rays for all the loaded images:
             rays_list = []
@@ -432,7 +424,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                                            pixels_batch, 
                                            id_maps,
                                            im_h, im_w,
-                                           render_dir, 
+                                           render_dir,
+                                           sa_percentile, 
                                            global_step)
                 shift_aware_loss_value = shift_aware_loss.item()
                 total_loss = total_loss + shift_aware_loss * sa_init_weight
@@ -478,23 +471,20 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             )
 
             # Diffuse render loss, for better and stabler geometry extraction if requested:
+            specular_loss_value, specular_psnr_value = 0, 0
             diffuse_loss_value, diffuse_psnr_value = None, None
-            if apply_diffuse_render_regularization:
-                # render only the diffuse version for the rays
-                diffuse_rendered_batch, _, _  = vol_mod.render_rays(
-                    rays_batch, render_diffuse=True
-                )
-                diffuse_rendered_pixels_batch = diffuse_rendered_batch.colour
-
-                # compute diffuse loss
-                diffuse_loss = l1_loss(diffuse_rendered_pixels_batch, pixels_batch)
-                total_loss = total_loss + diffuse_loss * diffuse_weight
-
-                # logging info:
-                diffuse_loss_value = diffuse_loss.item()
-                diffuse_psnr_value = mse2psnr(
-                    mse_loss(diffuse_rendered_pixels_batch, pixels_batch)
-                )
+            diffuse_rendered_batch, _, _  = vol_mod.render_rays(
+                rays_batch, render_diffuse=True
+            )
+            diffuse_rendered_pixels_batch = diffuse_rendered_batch.colour
+            # compute diffuse loss
+            diffuse_loss = l1_loss(diffuse_rendered_pixels_batch, pixels_batch)
+            total_loss = total_loss + diffuse_loss * diffuse_weight
+            # logging info:
+            diffuse_loss_value = diffuse_loss.item()
+            diffuse_psnr_value = mse2psnr(
+                mse_loss(diffuse_rendered_pixels_batch, pixels_batch)
+            )
 
             # wandb logging:
             lrs = [param_group["lr"] for param_group in optimizer.param_groups]
@@ -516,6 +506,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"TV weight" : tv_weight}, step=global_step)
             wandb.log({"structural loss" : structural_loss_value}, step=global_step)
             wandb.log({"directional loss" : directional_loss_value}, step=global_step)
+
 
             # optimization steps:
             # ES: Adding Gradiant accumulation
@@ -566,7 +557,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"Global Iteration: {global_step} "
                     f"Stage Iteration: {stage_iteration} "
                     f"specular_loss: {specular_loss_value: .3f} "
-                    f"specular_psnr: {specular_psnr_value.item(): .3f} "
+                    f"specular_psnr: {specular_psnr_value: .3f} "
                     f"SA Loss: {shift_aware_loss_value: .3f} "
                     f"SL Loss: {structural_loss_value: .3f} "
                     f"Semantic Loss: {semantic_loss_value: .3f} "

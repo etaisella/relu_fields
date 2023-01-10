@@ -90,9 +90,6 @@ def main(**kwargs) -> None:
 
     # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
     C0 = 0.28209479177387814
-    EPSILON = 1e-5
-    palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
-    palette = torch.logit(palette)
     palette = palette / C0
 
     # create the output path if it doesn't exist

@@ -20,7 +20,7 @@ train_and_render() {
 	# Train:
 	echo "Starting Training..."
 	python learn_voxelArt_grid_zero_one.py -d data/${1}/ \
-	-o logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_01q/ \
+	-o logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_04q/ \
 	--grid_dims=${7} ${7} ${7} \
 	--learning_rate=$4 \
 	--num_stages=$5 \
@@ -39,14 +39,14 @@ train_and_render() {
 	# Render Video
 	echo "Starting Rendering Final..."
 	python render_sh_based_voxel_grid.py -d data/${1}/ \
-	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_01q/saved_models/model_final.pth \
-	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_01q/final/
+	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_04q/saved_models/model_final.pth \
+	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_04q/final/
 
 	# Render Video
 	echo "Starting Rendering Pre - SA..."
 	python render_sh_based_voxel_grid.py -d data/${1}/ \
-	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_01q/saved_models/model_stage_3_iter_2400.pth \
-	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_01q/pre_sa/
+	-i logs/rf/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_04q/saved_models/model_stage_3_iter_2400.pth \
+	-o output_renders/${1}_${7}_sf${2}_iter${3}_lr${4}_stage${5}_samples${6}_colors${8}_qc_${9}_sa_${10}_${11}_${12}_${13}_sem${14}_pva_bf_04q/pre_sa/
 }
 
 # STARTING RUN:

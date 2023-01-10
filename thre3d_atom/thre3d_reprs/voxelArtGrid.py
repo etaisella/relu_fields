@@ -110,6 +110,7 @@ def clip_semantic_loss(output: Tensor,
     out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
     out_imgs = out_imgs.permute((0, 3, 1, 2))
     out_imgs = clip_tensor_preprocess(out_imgs)
+    out_features = clip_model.encode_image(out_imgs)
     out_features = normalize(clip_model.encode_image(out_imgs))
 
     if clip_prompt != "none":
@@ -239,6 +240,7 @@ def sa_loss(output: Tensor,
             image_height: int,
             image_width: int,
             output_path: Path,
+            percentile: float,
             global_step: int,
             debug_mode: bool=True):
     """Calculates shift aware loss on an output image"""
@@ -283,7 +285,7 @@ def sa_loss(output: Tensor,
                 continue
 
             #min_diff = torch.min(diffs_for_voxel.flatten())
-            min_diff = torch.quantile(diffs_for_voxel.flatten(), 0.1, interpolation='lower')
+            min_diff = torch.quantile(diffs_for_voxel.flatten(), percentile, interpolation='lower')
             min_diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)] = min_diff
         
         # 4. Add to overall loss:
@@ -615,7 +617,7 @@ class VoxelArtGrid(Module):
 
         # 2. Convert id images to indices, set 0 for empty
         feature_indices = torch.zeros_like(id_batch).long()
-        feature_indices[non_empty_voxel_mask] = id_batch[non_empty_voxel_mask].long()
+        feature_indices[non_empty_voxel_mask] = id_batch[non_empty_voxel_mask].long().detach()
 
         # 3. Index the feature grid
         pseudo_va_batch = torch.zeros((id_batch.shape[0], \
@@ -627,8 +629,8 @@ class VoxelArtGrid(Module):
         pseudo_va_batch = torch.nn.functional.softmax(pseudo_va_batch, dim=-1)
         pseudo_va_batch_color = C0 * torch.matmul(pseudo_va_batch, self._palette)
         pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \
-            torch.tensor([10000.0, 10000.0, 10000.0], device=self._features.device)
-        pseudo_va_batch_color = torch.sigmoid(pseudo_va_batch_color)
+            torch.tensor([1.0, 1.0, 1.0], device=self._features.device)
+        #pseudo_va_batch_color = torch.sigmoid(pseudo_va_batch_color)
 
         # 5. Make sure background pixels are white
         #pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \

@@ -151,6 +151,8 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="Gamma which we raise the shift aware loss by at every interval", show_default=True)
 @click.option("--sa_interval", type=click.INT, required=False, default=100,
               help="interval in iterations where we raise the SA weight", show_default=True)
+@click.option("--sa_percentile", type=click.FLOAT, required=False, default=0.1,
+              help="percentile in SA loss", show_default=True)
 @click.option("--semantic_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight of the semantic loss (CLiP)", show_default=True)
 @click.option("--accumulation_iters", type=click.INT, required=False, default=1,
@@ -214,8 +216,8 @@ def main(**kwargs) -> None:
     # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
     C0 = 0.28209479177387814
     EPSILON = 1e-5
-    palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
-    palette = torch.logit(palette)
+    #palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
+    #palette = torch.logit(palette)
     palette = palette / C0
 
     # Choose the proper activations dict based on the requested mode:
@@ -307,6 +309,7 @@ def main(**kwargs) -> None:
         sa_init_weight=config.sa_init_weight,
         sa_gamma=config.sa_gamma,
         sa_interval=config.sa_interval,
+        sa_percentile=config.sa_percentile,
         sa_start_iter=config.sa_start_iter,
         clip_model=clip_model,
         semantic_weight=config.semantic_weight,

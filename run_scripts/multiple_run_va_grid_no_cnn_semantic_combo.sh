@@ -52,6 +52,26 @@ train_and_render() {
 
 # STARTING RUN:
 
+scene=robot
+scale_factor=2.0
+num_iterations_per_stage=800
+learning_rate=0.03
+num_stages=3
+train_num_samples_per_ray=256
+gird_dim=32
+num_colors=5
+quantize_colors=True
+sa_init_weight=0.1
+sa_start_iter=2401
+sa_gamma=1.0
+sa_interval=100
+semantic_weight=0.01
+start_semantic_iter=2401
+
+train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
+$train_num_samples_per_ray $gird_dim $num_colors $quantize_colors $sa_init_weight $sa_start_iter \
+$sa_gamma $sa_interval $semantic_weight $start_semantic_iter
+
 scene=dog2
 scale_factor=2.0
 num_iterations_per_stage=800
@@ -61,11 +81,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.0
-sa_start_iter=-1
+sa_init_weight=0.1
+sa_start_iter=2401
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.1
+semantic_weight=0.01
 start_semantic_iter=2401
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
@@ -81,11 +101,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.0
-sa_start_iter=-1
+sa_init_weight=0.1
+sa_start_iter=2401
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.1
+semantic_weight=0.01
 start_semantic_iter=2401
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
@@ -101,11 +121,11 @@ train_num_samples_per_ray=256
 gird_dim=32
 num_colors=5
 quantize_colors=True
-sa_init_weight=0.0
-sa_start_iter=-1
+sa_init_weight=0.1
+sa_start_iter=2401
 sa_gamma=1.0
 sa_interval=100
-semantic_weight=0.1
+semantic_weight=0.01
 start_semantic_iter=2401
 
 train_and_render $scene $scale_factor $num_iterations_per_stage $learning_rate $num_stages \
