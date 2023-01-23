@@ -167,6 +167,14 @@ clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
               help="Use fastLayerDecomposition for palette extraction", show_default=True)
 @click.option("--directional_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight for directional loss", show_default=True)
+@click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
+              help="A flag that determines weather to quantize colors and use a palette", \
+                show_default=True)
+@click.option("--palette_learning_mode", type=click.BOOL, required=False, default=False,
+              help="A flag that determines weather learn the palette", \
+                show_default=True)
+@click.option("--min_distance_weight", type=click.FLOAT, required=False, default=0.0,
+              help="Weight for minimal distance (only relevant in palette learning mode)", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -178,6 +186,10 @@ def main(**kwargs) -> None:
         parameter.requires_grad = False
 
     config = EasyDict(kwargs)
+
+    assert(not (config.quantize_colors == True and \
+        config.palette_learning_mode == True)), f"Illegal for both quantize colors and palette learning mode to be true"
+
 
     wandb.init(project='VoxelArtReluFields', entity="etaisella",
                    config=dict(config), name="test " + str(datetime.now()), 
@@ -191,8 +203,43 @@ def main(**kwargs) -> None:
     log.info("logging configuration file ...")
     log_config_to_disk(config, output_path)
 
+    # create training data set:
+    train_dataset = PosedImagesDataset(
+            images_dir=data_path / "train",
+            camera_params_json=data_path / f"train_camera_params.json",
+            normalize_scene_scale=config.normalize_scene_scale,
+            downsample_factor=config.data_downsample_factor,
+            rgba_white_bkgd=config.white_bkgd,
+    )
+        
+    # get palette here
+    palette = None
+    num_colors = config.num_colors
+    if config.quantize_colors or config.palette_learning_mode:
+        print("Calculating Palette - be patient!")
+        concat_image = concatenate_images(data_path/"train")
+        if config.convex_hull_extraction:
+            palette, num_colors = get_palette_convex_hull(concat_image)
+        else:
+            palette = get_palette(concat_image, config.num_colors)
+        wandb.log({"palette": wandb.Image(torch.unsqueeze(torch.permute(palette, (1, 0)), dim=-2))}, step=0)
+
+        # save palette
+        output_folder = os.path.join(data_path, 'palette')
+        os.makedirs(output_folder, exist_ok=True)
+        with open(os.path.join(output_folder, 'palette.npy'), 'wb') as f:
+            np.save(f, palette)
+
+        # ES: This transform is necessary because the render process multiplies by C0
+        C0 = 0.28209479177387814
+        if config.palette_learning_mode:
+            EPSILON = 1e-5
+            palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
+            palette = torch.logit(palette)
+        palette = palette / C0
+
     # create a datasets for training and testing:
-    train_dataset, test_dataset = (
+    test_dataset, warped_dataset = (
         PosedImagesDataset(
             images_dir=data_path / mode,
             camera_params_json=data_path / f"{mode}_camera_params.json",
@@ -200,26 +247,9 @@ def main(**kwargs) -> None:
             downsample_factor=config.data_downsample_factor,
             rgba_white_bkgd=config.white_bkgd,
         )
-    for mode in ("train", "test")
+    for mode in ("test", "warped")
     )
-
-    # get palette here
-    print("Calculating Palette - be patient!")
-    concat_image = concatenate_images(data_path/"train")
-    if config.convex_hull_extraction:
-        palette, num_colors = get_palette_convex_hull(concat_image)
-    else:
-        palette = get_palette(concat_image, config.num_colors)
-        num_colors = config.num_colors
-    wandb.log({"palette": wandb.Image(torch.unsqueeze(torch.permute(palette, (1, 0)), dim=-2))}, step=0)
-
-    # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
-    C0 = 0.28209479177387814
-    EPSILON = 1e-5
-    #palette = torch.clip(palette, min=EPSILON, max=1.0-EPSILON)
-    #palette = torch.logit(palette)
-    palette = palette / C0
-
+    
     # Choose the proper activations dict based on the requested mode:
     if config.use_relu_field:
         vox_grid_density_activations_dict = {
@@ -247,7 +277,10 @@ def main(**kwargs) -> None:
     # fmt: off
     densities = torch.empty((*config.grid_dims, 2), dtype=torch.float32, device=device)
     torch.nn.init.uniform_(densities, -1.0, 1.0)
-    features = torch.empty((*config.grid_dims, num_colors), dtype=torch.float32, device=device)
+    if config.quantize_colors:
+        features = torch.empty((*config.grid_dims, num_colors), dtype=torch.float32, device=device)
+    else:
+        features = torch.empty((*config.grid_dims, 3), dtype=torch.float32, device=device)
 
 
     torch.nn.init.uniform_(features, -1.0, 1.0)
@@ -262,12 +295,19 @@ def main(**kwargs) -> None:
         tunable=True,
         palette=palette,
         num_colors=num_colors,
-        use_pure_argmax=config.use_pure_argmax
+        use_pure_argmax=config.use_pure_argmax,
+        quantize_colors=config.quantize_colors,
+        palette_learning_mode=config.palette_learning_mode,
     )
     # fmt: on
 
     # set up a volumetricModel using the previously created voxel-grid
     # noinspection PyTypeChecker
+    if config.quantize_colors:
+        radiance_hdr_tone_map = torch.nn.Identity()
+    else:
+        radiance_hdr_tone_map = torch.sigmoid
+
     vox_grid_vol_mod = VolumetricModel(
         thre3d_repr=voxel_grid,
         render_procedure=render_sh_voxelArt_grid,
@@ -277,6 +317,7 @@ def main(**kwargs) -> None:
             white_bkgd=config.white_bkgd,
             render_num_samples_per_ray=config.render_num_samples_per_ray,
             parallel_rays_chunk_size=config.parallel_rays_chunk_size,
+            radiance_hdr_tone_map=radiance_hdr_tone_map
         ),
         device=device,
     )
@@ -317,7 +358,10 @@ def main(**kwargs) -> None:
         clip_prompt=config.clip_prompt,
         start_semantic_iter=config.start_semantic_iter,
         sl_weight=config.sl_weight,
-        directional_weight=config.directional_weight
+        directional_weight=config.directional_weight,
+        palette_learning_mode=config.palette_learning_mode,
+        min_distance_weight=config.min_distance_weight,
+        warped_dataset=warped_dataset,
     )
 
 

@@ -157,7 +157,7 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
     # render images
     log.info(f"rendering intermediate output for feedback")
 
-    specular_rendered_output, specular_rendered_output_va, id_img = vol_mod.render(
+    specular_rendered_output, specular_rendered_output_va, id_img, _ = vol_mod.render(
         camera_pose=render_feedback_pose,
         camera_intrinsics=camera_intrinsics,
         parallel_rays_chunk_size=parallel_rays_chunk_size,
@@ -205,7 +205,7 @@ def visualize_sh_vox_grid_vol_mod_rendered_feedback(
     wandb.log({"voxel id map": wandb.Image(id_feedback_image)}, step=global_step)
 
     if log_diffuse_rendered_version:
-        diffuse_rendered_output, _, _ = vol_mod.render(
+        diffuse_rendered_output, _, _, _ = vol_mod.render(
             camera_pose=render_feedback_pose,
             camera_intrinsics=camera_intrinsics,
             parallel_rays_chunk_size=parallel_rays_chunk_size,

@@ -37,7 +37,7 @@ class SHVoxGridRenderConfig:
 
     # AccumulationConfig
     density2occupancy: Callable[[Tensor, Tensor], Tensor] = density2occupancy_pb
-    radiance_hdr_tone_map: Callable[[Tensor], Tensor] = torch.sigmoid
+    radiance_hdr_tone_map: Callable[[Tensor], Tensor] = torch.nn.Identity()
     stochastic_density_noise_std: float = 0.0  # used by NeRF not by us :)
     white_bkgd: bool = False
 

@@ -16,6 +16,7 @@ from thre3d_atom.thre3d_reprs.constants import (
     STATE_DICT,
     u_DENSITIES,
     u_FEATURES,
+    u_PALETTE,
     CONFIG_DICT,
 )
 from thre3d_atom.utils.imaging_utils import adjust_dynamic_range
@@ -33,7 +34,7 @@ def to8b(x: np.array) -> np.array:
 HIGH_DENSITY = 1000.0
 SOFTMIN_TEMP = 150.0
 EMPTY_SPACE_FACTOR = 10000.0
-SAVE_OUTPUTS_INTERVAL = 100
+SAVE_OUTPUTS_INTERVAL = 20
 C0 = 0.28209479177387814
 
 try:
@@ -207,12 +208,18 @@ def structural_loss(output: Tensor,
     return overall_sa_loss    
 
 
-def save_sa_ouputs(va_image: Tensor,
+def save_sa_ouputs(target_frame: Tensor, 
+                   va_image: Tensor,
                    diff_img: Tensor,
                    min_diff_img: Tensor,
                    output_path: Path,
                    global_step: int):
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(10, 3.333))
+    fig, (ax0, ax1, ax2, ax3) = plt.subplots(1, 4, figsize=(10, 2.5))
+
+    # Target Image:
+    target_frame_np = to8b(target_frame.detach().cpu().numpy())
+    ax0.imshow(target_frame_np)
+    ax0.set_title("Target Frame")
 
     # VA Image:
     va_image_np = to8b(va_image.detach().cpu().numpy())
@@ -295,11 +302,143 @@ def sa_loss(output: Tensor,
         # 5. Save debug outputs if debug mode is active:
         if debug_mode and img_idx == 0:
             if global_step % SAVE_OUTPUTS_INTERVAL == 0:
-                save_sa_ouputs(out_frame, diff_img, min_diff_img, output_path, global_step)
+                save_sa_ouputs(target_frame, out_frame, diff_img, min_diff_img, output_path, global_step)
 
 
     overall_sa_loss = overall_sa_loss / num_images
     return overall_sa_loss
+
+
+def save_dp_ouputs(target_frame: Tensor,
+                   target_frame_w_dpid: Tensor, 
+                   va_image: Tensor,
+                   guide_img: Tensor,
+                   diff_img: Tensor,
+                   output_path: Path,
+                   global_step: int):
+    fig, (ax0, ax1, ax2, ax3, ax4) = plt.subplots(1, 5, figsize=(10, 2))
+
+    # Target Image:
+    target_frame_np = to8b(target_frame.detach().cpu().numpy())
+    ax0.imshow(target_frame_np)
+    ax0.set_title("Target Frame")
+
+    # Diff Image:
+    guide_img_np = to8b(guide_img.detach().cpu().numpy())
+    ax1.imshow(guide_img_np)
+    ax1.set_title("Guide Image")
+
+    # Target Post DPID Image:
+    target_dpid_image_np = to8b(target_frame_w_dpid.detach().cpu().numpy())
+    ax2.imshow(target_dpid_image_np)
+    ax2.set_title("Target Frame after DPID")
+
+    # VA Image:
+    va_output_np = to8b(va_image.detach().cpu().numpy())
+    ax3.imshow(va_output_np)
+    ax3.set_title("Output VoxelArt Image")
+
+    # Diff Image:
+    diff_image_np = to8b(diff_img.detach().cpu().numpy())
+    ax4.imshow(diff_image_np, cmap='jet')
+    ax4.set_title("Error Image")
+
+    plt.tight_layout()
+    plt.savefig(output_path / f"sa_outputs_{global_step}.png", bbox_inches='tight')
+    wandb.log({"SA Outputs": wandb.Image(plt)}, step=global_step)
+
+
+def detail_preserving_loss(output: Tensor,
+                           target: Tensor,
+                           voxel_ids: Tensor,
+                           image_height: int,
+                           image_width: int,
+                           output_path: Path,
+                           global_step: int,
+                           percentile: float,
+                           lamb: float=2.3,
+                           dilate_kernel_size: int=7,
+                           debug_mode: bool=True):
+    """Calculates shift aware loss on an output image"""
+    device = target.device
+    eps = 0.00000001
+    vmax = torch.sqrt(torch.tensor([3.0], device=device))
+    out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
+    target_imgs = torch.reshape(target, (-1, image_height, image_width, 3))
+    vox_idx_imgs = torch.reshape(voxel_ids, (-1, image_height, image_width, 3))
+    num_images = out_imgs.shape[0]
+    vox_id_img = torch.empty((num_images, image_height, image_width, 1))
+    vox_id_img[:, :, :, 0] = vox_idx_imgs[:, :, :, 0] + \
+                        32 * vox_idx_imgs[:, :, :, 1] + \
+                        32 * 32 * vox_idx_imgs[:, :, :, 2]
+    dilation_operation = torch.nn.MaxPool2d(dilate_kernel_size, padding=int(dilate_kernel_size / 2), stride=(1, 1))
+
+    loss_class = torch.nn.MSELoss(reduction='none')
+    overall_dp_loss = torch.tensor([0.0], device=device)
+
+    # 1. Iteratre over all frames in batch:
+    for img_idx in range(num_images):
+        loss_for_frame = torch.tensor([0.0], device=device)
+        out_frame = out_imgs[img_idx]
+        target_frame = target_imgs[img_idx]
+
+        # for debugging - delete later
+        guide_pix_image = torch.ones_like(target_frame)
+        target_pix_image = torch.ones_like(target_frame)
+
+        # 1.b. Get unique voxel ids:
+        id_frame = torch.squeeze(vox_id_img[img_idx])
+        unique_ids = torch.unique(id_frame)
+        one_channel_target = torch.matmul(target_frame, torch.ones(3, device=target_frame.device))
+        foreground_mask = (one_channel_target != 3.0)
+
+        # 2. Iterate over all unique ids:
+        for unique_id in unique_ids.tolist():
+            if unique_id < 0:
+                continue
+            
+            # Get foreground pixels that are covered by the Voxel in the VA output
+            voxel_pixel_mask = (id_frame == unique_id).to(device)
+            valid_voxel_pixel_mask = torch.logical_and(voxel_pixel_mask, foreground_mask)
+
+            # If there are no valid pixels in our environment - skip
+            if torch.sum(valid_voxel_pixel_mask) == 0:
+                continue
+
+            valid_voxel_pixels = target_frame[valid_voxel_pixel_mask]
+            extended_vox_pix_mask = dilation_operation(torch.unsqueeze(voxel_pixel_mask, dim=0).type(torch.float32))
+            extended_vox_pix_mask = torch.logical_and(torch.squeeze(extended_vox_pix_mask).type(torch.bool), foreground_mask)
+            extended_voxel_pixels = target_frame[extended_vox_pix_mask]
+            
+            # Calculate Guide Pixel:
+            guide_pixel = torch.mean(extended_voxel_pixels, dim=0)
+
+            # for debugging:
+            guide_pix_image[valid_voxel_pixel_mask] = guide_pixel
+
+            # calculate distances and weights:
+            distances = torch.sqrt(torch.sum((valid_voxel_pixels - guide_pixel) ** 2, axis=-1)) + eps
+            weights = torch.unsqueeze((distances / vmax) ** lamb, dim=-1)
+            kp = torch.sum(weights, axis=0)
+            
+            target_pix = torch.sum((valid_voxel_pixels * weights) / kp, axis=0)
+            target_pix_image[voxel_pixel_mask] = target_pix
+        
+        # 4. Add to overall loss:
+        diff_image = torch.mean(loss_class(target_pix_image, out_frame), dim=-1)
+
+        loss_for_frame = torch.mean(diff_image)
+        overall_dp_loss = overall_dp_loss + loss_for_frame
+
+        # 5. Save debug outputs if debug mode is active:
+        if debug_mode and (img_idx == 0):
+            if global_step % SAVE_OUTPUTS_INTERVAL == 0:
+                save_dp_ouputs(target_frame, target_pix_image, out_frame, guide_pix_image, \
+                    diff_image, output_path, global_step)
+
+
+    overall_dp_loss = overall_dp_loss / num_images
+    return overall_dp_loss
 
 
 def total_variation_loss(output: Tensor,
@@ -375,6 +514,8 @@ class VoxelArtGrid(Module):
         num_colors: int = 6,
         use_pure_argmax: bool = False,
         temperature: float = 1.0,
+        quantize_colors: bool = True,
+        palette_learning_mode: bool = False,
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -422,13 +563,14 @@ class VoxelArtGrid(Module):
         self._expected_density_scale = expected_density_scale
         self._tunable = tunable
         self._palette = palette
-        # ES addition: adding interpolation mode as a public member
+        self._palette_learning_mode = palette_learning_mode
         self.interpolation_mode = "bilinear"
 
         # VoxelArt specific stuff
         self.use_pure_argmax = use_pure_argmax
         self._st_pure_argmax = StraightThroughSoftMax()
         self._num_colors = num_colors
+        self._quantize_colors = quantize_colors
         self.temperature = temperature
         self._softmax_density = ST_SoftMax(1.0)
         self._softmax_features = ST_SoftMax(1.0)
@@ -436,6 +578,8 @@ class VoxelArtGrid(Module):
         if tunable:
             self._densities = torch.nn.Parameter(self._densities)
             self._features = torch.nn.Parameter(self._features)
+            if self._palette_learning_mode:
+                self._palette = torch.nn.Parameter(self._palette)
 
         # note the x, y and z conventions for the width (+ve right), depth (+ve inwards) and height (+ve up)
         self.width_x, self.depth_y, self.height_z = (
@@ -607,13 +751,14 @@ class VoxelArtGrid(Module):
         )
 
 
-    def get_psuedo_voxelArt_img(self, id_batch: Tensor):
+    def get_psuedo_voxelArt_img(self, id_batch: Tensor, temperature=1.0):
         """Gets an output ray batch with softmaxed colors but
         zero one density"""
         # 1. Get non empty voxel mask
         id_batch_1dim = id_batch[..., 0] + id_batch[..., 1] * self.width_x + \
             id_batch[..., 2] * self.depth_y * self.width_x
         non_empty_voxel_mask = id_batch_1dim >= 0
+        softmax_pva = ST_SoftMax(temperature)
 
         # 2. Convert id images to indices, set 0 for empty
         feature_indices = torch.zeros_like(id_batch).long()
@@ -626,17 +771,28 @@ class VoxelArtGrid(Module):
             feature_indices[:,[1]], feature_indices[:,[2]]])
 
         # 4. Convert to color and set background pixels to white
-        pseudo_va_batch = torch.nn.functional.softmax(pseudo_va_batch, dim=-1)
-        pseudo_va_batch_color = C0 * torch.matmul(pseudo_va_batch, self._palette)
-        pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \
-            torch.tensor([1.0, 1.0, 1.0], device=self._features.device)
-        #pseudo_va_batch_color = torch.sigmoid(pseudo_va_batch_color)
+        if self._quantize_colors:
+            #pseudo_va_batch = softmax_pva(pseudo_va_batch)
+            pseudo_va_batch = torch.nn.functional.softmax(pseudo_va_batch, dim=-1)
+            pseudo_va_batch_color = C0 * torch.matmul(pseudo_va_batch, self._palette)
+        else:
+            pseudo_va_batch_color = C0 * pseudo_va_batch
+            pseudo_va_batch_color = torch.sigmoid(pseudo_va_batch_color)
 
         # 5. Make sure background pixels are white
-        #pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \
-        #    torch.tensor([1.0, 1.0, 1.0], device=self._features.device)
+        pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \
+            torch.tensor([1.0, 1.0, 1.0], device=self._features.device)
 
         return pseudo_va_batch_color
+
+
+    def get_palette_for_logging(self) -> Tensor:
+        """ Gets a palette in visual range for logging
+        """
+        palette_copy = self._palette.detach().cpu()
+        palette_copy = torch.sigmoid(palette_copy * C0)
+        palette_copy = torch.unsqueeze(torch.permute(palette_copy, (1, 0)), dim=-2)
+        return palette_copy
 
 
     def forward(self, points: Tensor, viewdirs: Optional[Tensor] = None) -> Tensor:
@@ -651,6 +807,7 @@ class VoxelArtGrid(Module):
                  whether the `self._radiance_transfer_function` is None.
         """
         # obtain the range-normalized points for interpolation
+        min_distance = None
         normalized_points = self._normalize_points(points)
 
         if self._palette != None:
@@ -743,11 +900,12 @@ class VoxelArtGrid(Module):
         )
         interpolated_features = self._feature_postactivation(interpolated_features)
 
-        if self.use_pure_argmax:
-            interpolated_features = self._st_pure_argmax(interpolated_features)
-        else: 
-            interpolated_features = self._softmax_features(interpolated_features)
-        interpolated_features = torch.matmul(interpolated_features, self._palette)
+        if self._quantize_colors:
+            if self.use_pure_argmax:
+                interpolated_features = self._st_pure_argmax(interpolated_features)
+            else: 
+                interpolated_features = self._softmax_features(interpolated_features)
+            interpolated_features = torch.matmul(interpolated_features, self._palette)
 
         # VA features
         interpolated_features_va = (
@@ -761,8 +919,23 @@ class VoxelArtGrid(Module):
             .squeeze()
         )
         interpolated_features_va = self._feature_postactivation(interpolated_features_va)
-        interpolated_features_va = self._st_pure_argmax(interpolated_features_va)
-        interpolated_features_va = torch.matmul(interpolated_features_va, self._palette)
+
+        if self._quantize_colors:
+            interpolated_features_va = self._st_pure_argmax(interpolated_features_va)
+            interpolated_features_va = torch.matmul(interpolated_features_va, self._palette)
+
+        if self._palette_learning_mode:
+            distances = torch.empty(interpolated_features_va.shape[0], \
+                self._palette.shape[0], device=self._device)
+            for i in range(self._palette.shape[0]):
+                distances[:, i] = torch.sum((torch.sigmoid(interpolated_features_va * C0) -  \
+                    torch.sigmoid(self._palette[i] * C0)) ** 2, dim=-1)
+            pred = torch.argmin(distances, dim=-1)
+            min_distances = torch.min(distances, dim=-1).values
+            min_distances[torch.squeeze(interpolated_densities_va) == 0] = 0 # don't account for low density voxels
+            min_distance = torch.mean(min_distances) 
+            zero_one_distances = torch.zeros_like(distances).scatter_(-1, pred.unsqueeze(-1), 1.)
+            interpolated_features_va = torch.matmul(zero_one_distances, self._palette)
 
         # apply the radiance transfer function if it is not None and if view-directions are available
         if self._radiance_transfer_function is not None and viewdirs is not None:
@@ -789,7 +962,7 @@ class VoxelArtGrid(Module):
         result_regular = torch.cat([interpolated_features, interpolated_densities], dim=-1)
         result_va = torch.cat([interpolated_features_va, interpolated_densities_va], dim=-1)
 
-        return result_regular, result_va, id_samples
+        return result_regular, result_va, id_samples, min_distance
 
     def create_voxel_grid_from_z1_voxel_grid(self) -> VoxelGrid:
         # get regular densities
@@ -857,18 +1030,36 @@ def scale_zero_one_voxel_grid_with_required_output_size(
         palette=voxel_grid._palette,
         num_colors=voxel_grid._num_colors,
         use_pure_argmax=voxel_grid.use_pure_argmax,
+        quantize_colors=voxel_grid._quantize_colors,
+        palette_learning_mode=voxel_grid._palette_learning_mode,
         **voxel_grid.get_config_dict(),
     )
 
     # noinspection PyProtectedMember
     return new_voxel_grid
 
-def create_voxelArt_grid_from_saved_info_dict(saved_info: Dict[str, Any]) -> VoxelArtGrid:
+def create_voxelArt_grid_from_saved_info_dict(saved_info: Dict[str, Any], 
+                                              quantize_colors: bool) -> VoxelArtGrid:
     densities = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_DENSITIES])
     features = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_FEATURES])
     voxel_grid = VoxelArtGrid(
-        densities=densities, features=features, \
+        densities=densities, features=features, quantize_colors=quantize_colors, \
              **saved_info[THRE3D_REPR][CONFIG_DICT]
     )
     voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])
     return voxel_grid
+
+
+def create_voxelArt_grid_from_saved_info_dict_plm(saved_info: Dict[str, Any], 
+                                              quantize_colors: bool) -> VoxelArtGrid:
+    densities = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_DENSITIES])
+    features = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_FEATURES])
+    palette = torch.empty_like(saved_info[THRE3D_REPR][STATE_DICT][u_PALETTE])
+    voxel_grid = VoxelArtGrid(
+        densities=densities, features=features, palette=palette, \
+            quantize_colors=quantize_colors,
+             **saved_info[THRE3D_REPR][CONFIG_DICT]
+    )
+    voxel_grid.load_state_dict(saved_info[THRE3D_REPR][STATE_DICT])
+    return voxel_grid
+

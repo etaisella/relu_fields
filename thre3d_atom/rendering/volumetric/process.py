@@ -112,7 +112,7 @@ def process_points_with_sh_voxelArt_grid(
     flat_sampled_points = sampled_points.points.reshape(-1, num_coords)
 
     # in VA mode we return the regular features, va features (nearest neighbor pure argmax), and ID rays
-    interpolated_features, interpolated_va_features, voxel_id_rays = voxel_grid(flat_sampled_points)
+    interpolated_features, interpolated_va_features, voxel_id_rays, min_distance = voxel_grid(flat_sampled_points)
     
     # unpack sh_coeffs and density features:
     sh_coeffs, raw_densities = (
@@ -201,4 +201,4 @@ def process_points_with_sh_voxelArt_grid(
 
     id_rays_result = voxel_id_rays.reshape(num_rays, num_samples_per_ray, -1) 
 
-    return result, result_va, id_rays_result
+    return result, result_va, id_rays_result, min_distance

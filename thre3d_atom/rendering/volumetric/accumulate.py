@@ -67,8 +67,8 @@ def accumulate_radiance_density_on_rays(
     weights = alpha * torch.cumprod(torch.cat([ones, 1.0 - alpha], -1), -1)[:, :-1]
 
     # accumulate the predicted radiance values of the samples using the computed alphas
-    #colour = radiance_hdr_tone_map(raw_radiance)
-    colour = raw_radiance
+    colour = radiance_hdr_tone_map(raw_radiance)
+    #colour = raw_radiance
     # dims below: [N, NUM_COLOUR_CHANNELS]
     colour_render = torch.sum(colour * weights[..., None], dim=-2)
 
@@ -162,8 +162,8 @@ def accumulate_radiance_density_on_rays_va(
     contributing_voxel_map[background_mask, :] = -1
 
     # accumulate the predicted radiance values of the samples using the computed alphas
-    #colour = radiance_hdr_tone_map(raw_radiance)
-    colour = raw_radiance
+    colour = radiance_hdr_tone_map(raw_radiance)
+    
     # dims below: [N, NUM_COLOUR_CHANNELS]
     colour_render = torch.sum(colour * weights[..., None], dim=-2)
 

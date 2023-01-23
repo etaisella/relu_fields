@@ -163,8 +163,8 @@ def render_va(
     ), f"Please note that the RENDER interface only works with FLAT RAYS!"
 
     sampled_points = sampler_fn(rays, camera_bounds, num_samples)
-    processed_points, processed_va_points, id_rays = point_processor_fn(sampled_points, rays)
+    processed_points, processed_va_points, id_rays, min_distance = point_processor_fn(sampled_points, rays)
     rendered_output_regular = accumulator_fn(processed_points, rays)
     rendered_output_va, rendered_id_map = accumulator_fn_va(processed_va_points, id_rays, rays)
 
-    return rendered_output_regular, rendered_output_va, rendered_id_map
+    return rendered_output_regular, rendered_output_va, rendered_id_map, min_distance

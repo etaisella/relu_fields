@@ -7,7 +7,8 @@ import torch
 from thre3d_atom.modules.volumetric_model import (
     create_volumetric_model_from_saved_model,
 )
-from thre3d_atom.thre3d_reprs.voxelArtGrid import create_voxelArt_grid_from_saved_info_dict
+from thre3d_atom.thre3d_reprs.voxelArtGrid import create_voxelArt_grid_from_saved_info_dict, \
+    create_voxelArt_grid_from_saved_info_dict_plm
 from thre3d_atom.utils.constants import HEMISPHERICAL_RADIUS, CAMERA_INTRINSICS
 from thre3d_atom.utils.imaging_utils import (
     get_thre360_animation_poses,
@@ -69,6 +70,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               required=False, help="Render the three diffreent coeff modes to see the effects")
 @click.option("--num_colors", type=click.IntRange(min=1), default=5,
               required=False, help="Number of colors in palette")
+@click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
+              help="A flag that determines weather to quantize colors and use a palette", \
+                show_default=True)
+@click.option("--palette_learning_mode", type=click.BOOL, required=False, default=True,
+              help="A flag that determines weather learn the palette", \
+                show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -84,27 +91,36 @@ def main(**kwargs) -> None:
     data_path = Path(config.data_path)
 
     # get palette here
-    print("Calculating Palette - be patient!")
-    concat_image = concatenate_images(data_path/"train")
-    palette = get_palette(concat_image, config.num_colors)
+    palette = None
+    if config.quantize_colors:
+        print("Calculating Palette - be patient!")
+        concat_image = concatenate_images(data_path/"train")
+        palette = get_palette(concat_image, config.num_colors)
 
-    # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
-    C0 = 0.28209479177387814
-    palette = palette / C0
+        # ES: These transformations are necessary because the render process multiplies by C0 and performs sigmoid
+        C0 = 0.28209479177387814
+        palette = palette / C0
 
     # create the output path if it doesn't exist
     output_path.mkdir(exist_ok=True, parents=True)
-
+    
+    if config.palette_learning_mode:
+        thre3d_repr_creator=create_voxelArt_grid_from_saved_info_dict_plm
+    else:
+        thre3d_repr_creator=create_voxelArt_grid_from_saved_info_dict
+    
     # load volumetric_model from the model_path
     vol_mod, extra_info = create_volumetric_model_from_saved_model(
         model_path=model_path,
-        thre3d_repr_creator=create_voxelArt_grid_from_saved_info_dict,
+        thre3d_repr_creator=thre3d_repr_creator,
         device=device,
         num_clusters=config.clusters,
+        quantize_colors=config.quantize_colors
     )
 
-    vol_mod.thre3d_repr._palette = palette
-    vol_mod.num_colors = config.num_colors
+    if not config.palette_learning_mode:
+        vol_mod.thre3d_repr._palette = palette  
+        vol_mod.num_colors = config.num_colors
 
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]

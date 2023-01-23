@@ -34,6 +34,7 @@ from thre3d_atom.thre3d_reprs.voxels import (
 from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     VoxelArtGrid,
     sa_loss,
+    detail_preserving_loss,
     structural_loss,
     clip_semantic_loss,
     scale_zero_one_voxel_grid_with_required_output_size,
@@ -116,7 +117,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     clip_prompt: str="none",
     start_semantic_iter=-1,
     sl_weight=1.0,
-    directional_weight=0.0
+    directional_weight=0.0,
+    palette_learning_mode=False,
+    min_distance_weight=0.0,
+    warped_dataset=None
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -174,13 +178,19 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
     # create downsampled versions of the train_dataset for lower training stages
     stagewise_train_datasets = [train_dataset]
+    stagewise_warped_datasets = [warped_dataset]
     dataset_config_dict = train_dataset.get_config_dict()
+    warped_config_dict = warped_dataset.get_config_dict()
     data_downsample_factor = dataset_config_dict["downsample_factor"]
     for stage in range(1, num_stages):
         dataset_config_dict.update(
             {"downsample_factor": data_downsample_factor * (scale_factor**stage)}
         )
         stagewise_train_datasets.insert(0, PosedImagesDataset(**dataset_config_dict))
+        warped_config_dict.update(
+            {"downsample_factor": data_downsample_factor * (scale_factor**stage)}
+        )
+        stagewise_warped_datasets.insert(0, PosedImagesDataset(**warped_config_dict))
 
     # downscale the feature-grid to the smallest size:
     if not voxel_art_3dcnn_mode: 
@@ -215,6 +225,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
     train_dl = _make_dataloader_from_dataset(
         train_dataset, image_batch_cache_size, num_workers
+    )
+    warped_dl = _make_dataloader_from_dataset(
+        warped_dataset, image_batch_cache_size, num_workers
     )
     test_dl = (
         _make_dataloader_from_dataset(test_dataset, 1, num_workers)
@@ -282,10 +295,15 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         # followed by creating an infinite training data-loader
         iterations_per_current_stage = num_iterations_per_stage
         current_stage_train_dataset = stagewise_train_datasets[stage - 1]
+        current_stage_warped_dataset = stagewise_warped_datasets[stage - 1]
         train_dl = _make_dataloader_from_dataset(
             current_stage_train_dataset, image_batch_cache_size, num_workers
         )
         infinite_train_dl = iter(infinite_dataloader(train_dl))
+        warped_dl = _make_dataloader_from_dataset(
+            current_stage_warped_dataset, image_batch_cache_size, num_workers
+        )
+        infinite_warped_dl = iter(infinite_dataloader(warped_dl))
 
         # setup volumetric_model's optimizer
         current_stage_lr = learning_rate * (stagewise_lr_decay_gamma ** (stage - 1))
@@ -295,7 +313,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             current_acumulation_iters = accumulation_iters
 
             if semantic_weight != 0.0 or sa_weight != 0 or directional_weight != 0:
-                iterations_per_current_stage = num_iterations_per_stage * 2
+                iterations_per_current_stage = num_iterations_per_stage * 3
 
         optimizeable_parameters = vol_mod.thre3d_repr.parameters()
         assert (
@@ -340,7 +358,14 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # please check the `data.datasets` module
             total_loss = 0
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
-            images, poses = next(infinite_train_dl)
+
+            if calculate_shift_aware:
+                images, poses = next(infinite_warped_dl)
+            else:
+                images, poses = next(infinite_train_dl)
+            #images, poses = next(infinite_train_dl)
+            
+            wandb.log({"Input Image": wandb.Image(images[0])}, step=global_step)
 
             # ES: Compute Shift-Aware loss:
             if global_step == sa_start_iter:
@@ -401,36 +426,34 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 )
 
             # render a small chunk of rays and compute a loss on it
-            specular_rendered_batch, specular_rendered_batch_va, id_maps = vol_mod.render_rays(rays_batch)
+            specular_rendered_batch, specular_rendered_batch_va, id_maps, min_distance = vol_mod.render_rays(rays_batch)
             specular_rendered_pixels_batch = specular_rendered_batch.colour
 
             pva_image = vol_mod._thre3d_repr.get_psuedo_voxelArt_img(id_maps)
 
             if calculate_structure_loss:
                 structure_loss = sparsity_loss(vol_mod.thre3d_repr._features)
-                #structure_loss = structural_loss(specular_rendered_batch_va.colour,
-                #                                 pixels_batch,
-                #                                 id_maps,
-                #                                 im_h, im_w,
-                #                                 render_dir,
-                #                                 global_step)
                 structural_loss_value = structure_loss.item()
                 total_loss = total_loss + structure_loss * sl_weight
             else:
                 structural_loss_value = 0.0
 
             if calculate_shift_aware:
-                shift_aware_loss = sa_loss(pva_image, 
+                shift_aware_loss = detail_preserving_loss(pva_image, 
                                            pixels_batch, 
                                            id_maps,
                                            im_h, im_w,
                                            render_dir,
+                                           global_step,
                                            sa_percentile, 
-                                           global_step)
+                                           )
                 shift_aware_loss_value = shift_aware_loss.item()
                 total_loss = total_loss + shift_aware_loss * sa_init_weight
             else:
                 shift_aware_loss_value = 0.0
+
+            if palette_learning_mode and min_distance_weight != 0:
+                total_loss = total_loss + min_distance_weight * min_distance
 
             # ES: Compute Semantic loss:
             if calculate_semantics and semantic_weight != 0.0:
@@ -473,7 +496,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # Diffuse render loss, for better and stabler geometry extraction if requested:
             specular_loss_value, specular_psnr_value = 0, 0
             diffuse_loss_value, diffuse_psnr_value = None, None
-            diffuse_rendered_batch, _, _  = vol_mod.render_rays(
+            diffuse_rendered_batch, _, _, _  = vol_mod.render_rays(
                 rays_batch, render_diffuse=True
             )
             diffuse_rendered_pixels_batch = diffuse_rendered_batch.colour
@@ -487,7 +510,12 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             )
 
             # wandb logging:
+            if not palette_learning_mode:
+                min_distance = 0
+            palette_to_log = vol_mod.thre3d_repr.get_palette_for_logging()
+            wandb.log({"palette": wandb.Image(palette_to_log)}, step=global_step)
             lrs = [param_group["lr"] for param_group in optimizer.param_groups]
+            wandb.log({"min feature distance" : float(min_distance)}, step=global_step)
             wandb.log({"current LR" : float(lrs[0])}, step=global_step)
             wandb.log({"training stage" : stage}, step=global_step)
             wandb.log({"specular_loss" : specular_loss_value}, step=global_step)

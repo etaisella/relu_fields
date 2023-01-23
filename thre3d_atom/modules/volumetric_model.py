@@ -163,7 +163,7 @@ class VolumetricModel:
             for chunk_index in progress_bar(
                 range(0, len(flat_rays), parallel_rays_chunk_size)
             ):
-                rendered_chunk, rendered_chunk_va, id_map_chunk = self.render_rays(
+                rendered_chunk, rendered_chunk_va, id_map_chunk, min_distance = self.render_rays(
                     flat_rays[chunk_index : chunk_index + parallel_rays_chunk_size],
                     parallel_points_chunk_size,
                     **kwargs,
@@ -188,7 +188,7 @@ class VolumetricModel:
             camera_intrinsics=camera_intrinsics,
         )
 
-        return rendered_output, rendered_output_va, id_map_output
+        return rendered_output, rendered_output_va, id_map_output, min_distance
 
 
 def create_volumetric_model_from_saved_model(
@@ -196,10 +196,11 @@ def create_volumetric_model_from_saved_model(
     thre3d_repr_creator: Callable[[Dict[str, Any]], Module],
     device: torch.device = torch.device("cpu"),
     num_clusters: int = 0,
+    quantize_colors: bool=True,
 ) -> Tuple[VolumetricModel, Dict[str, Any]]:
     # load the saved model's data using
     model_data = torch.load(model_path, map_location=device)
-    thre3d_repr = thre3d_repr_creator(model_data)
+    thre3d_repr = thre3d_repr_creator(model_data, quantize_colors)
     render_config = model_data[RENDER_CONFIG_TYPE](**model_data[RENDER_CONFIG])
 
     # ES Addition - Quantize zero order coeffs:
