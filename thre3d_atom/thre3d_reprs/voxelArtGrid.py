@@ -356,9 +356,10 @@ def detail_preserving_loss(output: Tensor,
                            output_path: Path,
                            global_step: int,
                            percentile: float,
-                           lamb: float=2.3,
+                           lamb: float=1.7,
                            dilate_kernel_size: int=7,
-                           debug_mode: bool=True):
+                           debug_mode: bool=True,
+                           calc_region_map: bool=False):
     """Calculates shift aware loss on an output image"""
     device = target.device
     eps = 0.00000001
@@ -410,6 +411,17 @@ def detail_preserving_loss(output: Tensor,
             extended_vox_pix_mask = torch.logical_and(torch.squeeze(extended_vox_pix_mask).type(torch.bool), foreground_mask)
             extended_voxel_pixels = target_frame[extended_vox_pix_mask]
             
+            if calc_region_map:
+                region_map_image = torch.ones_like(target_frame)
+                region_map_image[foreground_mask] = target_frame[foreground_mask]
+                region_map_image[extended_vox_pix_mask] = torch.tensor([1.0, 0.0, 0.0], device=target_frame.device)
+                region_map_image[valid_voxel_pixel_mask] = torch.tensor([0.0, 0.0, 1.0], device=target_frame.device)
+                region_map_image_np = to8b(region_map_image.detach().cpu().numpy())
+                plt.imshow(region_map_image_np)
+                if global_step > 2401:
+                    plt.savefig(output_path / f"region_map.png", bbox_inches='tight')
+                plt.close()
+
             # Calculate Guide Pixel:
             guide_pixel = torch.mean(extended_voxel_pixels, dim=0)
 

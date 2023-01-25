@@ -36,7 +36,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # CLIP Setup
 print(f"Available CLiP models - {clip.available_models()}")
-clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
+clip_model, clip_preprocess = clip.load("ViT-B/16", device=device, jit=False)
 
 # -------------------------------------------------------------------------------------
 #  Command line configuration for the script                                          |
