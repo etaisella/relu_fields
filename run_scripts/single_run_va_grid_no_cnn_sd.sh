@@ -46,12 +46,22 @@ train_and_render() {
 
 # STARTING RUN:
 
-scene=dog2
+scene=frog
 quantize_colors=True
 start_sdl_iter=2401
 sa_init_weight=100.0
 sa_start_iter=2401
 sa_percentile=0.1
-prompt="a render of a cute grey dog with a red collar and black eyes in VoxelArt style"
+prompt="a render of a cute tree frog with big black eyes in VoxelArt style"
 
-train_and_render $scene $quantize_colors $start_sdl_iter $sa_init_weight $sa_start_iter $sa_percentile "\${prompt}"
+train_and_render $scene $quantize_colors $start_sdl_iter $sa_init_weight $sa_start_iter $sa_percentile "$prompt"
+
+scene=lego
+quantize_colors=True
+start_sdl_iter=2401
+sa_init_weight=100.0
+sa_start_iter=2401
+sa_percentile=0.1
+prompt="a render of a yellow bulldozer in VoxelArt style"
+
+train_and_render $scene $quantize_colors $start_sdl_iter $sa_init_weight $sa_start_iter $sa_percentile "$prompt"

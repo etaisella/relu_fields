@@ -44,6 +44,11 @@ try:
 except ImportError:
     BICUBIC = Image.BICUBIC
 
+
+def mySigmoid(x):
+    exp = torch.exp(x)
+    return exp / (exp + 1)
+
 # clip preprocess for tensor
 def clip_transform(n_px):
     return transforms.Compose([
@@ -809,12 +814,12 @@ class VoxelArtGrid(Module):
 
         # 4. Convert to color and set background pixels to white
         if self._quantize_colors:
-            #pseudo_va_batch = softmax_pva(pseudo_va_batch)
+
             pseudo_va_batch = torch.nn.functional.softmax(pseudo_va_batch, dim=-1)
             pseudo_va_batch_color = C0 * torch.matmul(pseudo_va_batch, self._palette)
         else:
-            pseudo_va_batch_color = C0 * pseudo_va_batch
-            pseudo_va_batch_color = torch.sigmoid(pseudo_va_batch_color)
+            pseudo_va_batch = C0 * pseudo_va_batch
+            pseudo_va_batch_color = mySigmoid(pseudo_va_batch)
 
         # 5. Make sure background pixels are white
         pseudo_va_batch_color[torch.logical_not(non_empty_voxel_mask)] = \

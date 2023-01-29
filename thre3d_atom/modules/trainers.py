@@ -396,7 +396,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 specular_weight = 0.07 
                 specular_weight = 1.0
                 vol_mod.thre3d_repr._densities.requires_grad = False
-                vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
+                #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
                 optimizeable_parameters = vol_mod.thre3d_repr.parameters()
                 optimizer = torch.optim.Adam(
                     params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
