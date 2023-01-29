@@ -40,7 +40,8 @@ from thre3d_atom.thre3d_reprs.voxelArtGrid import (
     scale_zero_one_voxel_grid_with_required_output_size,
     total_variation_loss,
     sparsity_loss,
-    clipDirectionalLoss
+    clipDirectionalLoss,
+    scoreDistillationLoss,
 )
 from thre3d_atom.thre3d_reprs.voxelArtGrid_old import VoxelArtGrid
 from thre3d_atom.thre3d_reprs.voxelArtGrid_3dcnn import VoxelArtGrid_3DCNN
@@ -120,7 +121,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     directional_weight=0.0,
     palette_learning_mode=False,
     min_distance_weight=0.0,
-    warped_dataset=None
+    warped_dataset=None,
+    quantize_colors=True,
+    start_sdl_iter=-1,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -156,6 +159,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     Returns: the trained version of the VolumetricModel. Also writes multiple assets to disk
     """
     calculate_semantics = False
+    calculate_sdl = False
     calculate_total_variation = False
     calculate_shift_aware = False
     calculate_structure_loss = False
@@ -174,7 +178,14 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     )
 
     # set up directional loss
-    dir_loss = clipDirectionalLoss(clip_model, device)
+    if directional_weight != 0.0:
+        dir_loss = clipDirectionalLoss(clip_model, device)
+
+    # set up score distillation loss
+    if start_sdl_iter != -1:
+        sd_loss = scoreDistillationLoss(device,
+                                        "a render of a cute grey dog with a red collar and black eyes in VoxelArt style",
+                                        )
 
     # create downsampled versions of the train_dataset for lower training stages
     stagewise_train_datasets = [train_dataset]
@@ -312,8 +323,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         if stage == num_stages:
             current_acumulation_iters = accumulation_iters
 
-            if semantic_weight != 0.0 or sa_weight != 0 or directional_weight != 0:
-                iterations_per_current_stage = num_iterations_per_stage * 3
+            if semantic_weight != 0.0 or sa_weight != 0 or start_sdl_iter != -1:
+                iterations_per_current_stage = num_iterations_per_stage * 4
 
         optimizeable_parameters = vol_mod.thre3d_repr.parameters()
         assert (
@@ -359,7 +370,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             total_loss = 0
             global_step = ((stage - 1) * num_iterations_per_stage) + stage_iteration
 
-            if calculate_shift_aware:
+            if calculate_shift_aware and False: # TODO: remove later! currently disabled
                 images, poses = next(infinite_warped_dl)
             else:
                 images, poses = next(infinite_train_dl)
@@ -370,8 +381,19 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # ES: Compute Shift-Aware loss:
             if global_step == sa_start_iter:
                 calculate_shift_aware = True
-                diffuse_weight = 0.005
-                specular_weight = 0.005
+                vol_mod.thre3d_repr._densities.requires_grad = False
+                #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
+                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                optimizer = torch.optim.Adam(
+                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                    betas=(0.9, 0.999),
+                )
+
+            # ES: Compute score distillation loss:
+            if global_step == start_sdl_iter:
+                calculate_sdl = True
+                diffuse_weight = 0.7
+                specular_weight = 0.7
                 vol_mod.thre3d_repr._densities.requires_grad = False
                 vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
                 optimizeable_parameters = vol_mod.thre3d_repr.parameters()
@@ -379,7 +401,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
                     betas=(0.9, 0.999),
                 )
-
             
             # ES: Compute Shift-Aware loss:
             if global_step == start_semantic_iter:
@@ -432,6 +453,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
             pva_image = vol_mod._thre3d_repr.get_psuedo_voxelArt_img(id_maps)
 
+            # ES: Compute SDL:
+            if calculate_sdl:
+                sd_loss.training_step(pva_image, im_h, im_w)
+
             if calculate_structure_loss:
                 structure_loss = sparsity_loss(vol_mod.thre3d_repr._features)
                 structural_loss_value = structure_loss.item()
@@ -440,13 +465,13 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 structural_loss_value = 0.0
 
             if calculate_shift_aware:
-                shift_aware_loss = detail_preserving_loss(pva_image, 
+                shift_aware_loss = sa_loss(pva_image, 
                                            pixels_batch, 
                                            id_maps,
                                            im_h, im_w,
                                            render_dir,
+                                           sa_percentile,
                                            global_step,
-                                           sa_percentile, 
                                            )
                 shift_aware_loss_value = shift_aware_loss.item()
                 total_loss = total_loss + shift_aware_loss * sa_init_weight
@@ -513,8 +538,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # wandb logging:
             if not palette_learning_mode:
                 min_distance = 0
-            palette_to_log = vol_mod.thre3d_repr.get_palette_for_logging()
-            wandb.log({"palette": wandb.Image(palette_to_log)}, step=global_step)
+            if quantize_colors:
+                palette_to_log = vol_mod.thre3d_repr.get_palette_for_logging()
+                wandb.log({"palette": wandb.Image(palette_to_log)}, step=global_step)
             lrs = [param_group["lr"] for param_group in optimizer.param_groups]
             wandb.log({"min feature distance" : float(min_distance)}, step=global_step)
             wandb.log({"current LR" : float(lrs[0])}, step=global_step)
@@ -545,6 +571,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             if ((global_step + 1) % current_acumulation_iters == 0) or (global_step + 1 == num_iterations_per_stage):
                 optimizer.step()
                 optimizer.zero_grad()
+            
             
             #torch.cuda.empty_cache()
             # ---------------------------------------------------------------------------------

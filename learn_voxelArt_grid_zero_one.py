@@ -34,10 +34,6 @@ torch.multiprocessing.set_start_method("spawn")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# CLIP Setup
-print(f"Available CLiP models - {clip.available_models()}")
-clip_model, clip_preprocess = clip.load("ViT-B/16", device=device, jit=False)
-
 # -------------------------------------------------------------------------------------
 #  Command line configuration for the script                                          |
 # -------------------------------------------------------------------------------------
@@ -175,21 +171,27 @@ clip_model, clip_preprocess = clip.load("ViT-B/16", device=device, jit=False)
                 show_default=True)
 @click.option("--min_distance_weight", type=click.FLOAT, required=False, default=0.0,
               help="Weight for minimal distance (only relevant in palette learning mode)", show_default=True)
+@click.option("--start_sdl_iter", type=click.INT, required=False, default=-1,
+              help="iteration to start score distillation in", show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
 def main(**kwargs) -> None:
     # load the requested configuration for the training
 
-    print("Freezing CLiP Parameters:")
-    for parameter in clip_model.parameters():
-        parameter.requires_grad = False
-
     config = EasyDict(kwargs)
 
     assert(not (config.quantize_colors == True and \
         config.palette_learning_mode == True)), f"Illegal for both quantize colors and palette learning mode to be true"
 
+    if config.semantic_weight != 0:
+        # CLIP Setup
+        print(f"Available CLiP models - {clip.available_models()}")
+        clip_model, clip_preprocess = clip.load("ViT-B/16", device=device, jit=False)
+        for parameter in clip_model.parameters():
+            parameter.requires_grad = False
+    else:
+        clip_model = None
 
     wandb.init(project='VoxelArtReluFields', entity="etaisella",
                    config=dict(config), name="test " + str(datetime.now()), 
@@ -362,6 +364,8 @@ def main(**kwargs) -> None:
         palette_learning_mode=config.palette_learning_mode,
         min_distance_weight=config.min_distance_weight,
         warped_dataset=warped_dataset,
+        quantize_colors=config.quantize_colors,
+        start_sdl_iter=config.start_sdl_iter,
     )
 
 

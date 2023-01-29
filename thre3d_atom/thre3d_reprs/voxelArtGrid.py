@@ -2,6 +2,7 @@
 from pathlib import Path
 from typing import Tuple, NamedTuple, Optional, Callable, Dict, Any
 from thre3d_atom.thre3d_reprs.voxels import VoxelGrid
+from thre3d_atom.thre3d_reprs.sd import StableDiffusion
 from thre3d_atom.thre3d_reprs.straightThroughSoftmax import StraightThroughSoftMax, ST_SoftMax
 
 import torch
@@ -53,6 +54,27 @@ def clip_transform(n_px):
     ])
 
 clip_tensor_preprocess = clip_transform(224)
+
+class scoreDistillationLoss(Module):
+    def __init__(self,
+                 device,
+                 prompt):
+        super().__init__()
+
+        # get sd model
+        self.sd_model = StableDiffusion(device,"2.0", hf_key="Fictiverse/Stable_Diffusion_VoxelArt_Model")
+
+        # encode text
+        self.text_encoding = self.sd_model.get_text_embeds(prompt, '')
+    
+    def training_step(self, output, image_height, image_width):
+        # format output images
+        out_imgs = torch.reshape(output, (-1, image_height, image_width, 3))
+        out_imgs = out_imgs.permute((0, 3, 1, 2))
+
+        # perform training step
+        self.sd_model.train_step(self.text_encoding, out_imgs)
+
 
 class clipDirectionalLoss(Module):
     def __init__(self, 
@@ -807,6 +829,41 @@ class VoxelArtGrid(Module):
         return palette_copy
 
 
+    def densitiy_only_forward(self, points: Tensor) -> Tensor:
+        zero_one_tensor = torch.tensor([-HIGH_DENSITY, HIGH_DENSITY]).to(self._device)
+
+        # get preactivated densities:
+        preactivated_densities = self._density_preactivation(
+            self._densities.detach() * self._expected_density_scale
+        ) 
+
+        # sample points
+        normalized_points = self._normalize_points(points.detach())
+        interpolated_densities_va = (
+            grid_sample(
+                # note the weird z, y, x convention of PyTorch's grid_sample.
+                # reference ->
+                # https://discuss.pytorch.org/t/surprising-convention-for-grid-sample-coordinates/79997/3
+                preactivated_densities[None, ...].permute(0, 4, 3, 2, 1),
+                normalized_points[None, None, None, ...],
+                mode='nearest',
+                align_corners=False,
+            )
+            .permute(0, 2, 3, 4, 1)
+            .squeeze()
+        )[
+            ..., None
+        ]  # note this None is required because of the squeeze operation :sweat_smile:
+
+        interpolated_densities_va = torch.squeeze(interpolated_densities_va)
+        interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
+        interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)
+        interpolated_densities_va = self._density_postactivation(interpolated_densities_va)
+        interpolated_densities_va = torch.unsqueeze(interpolated_densities_va, dim=-1)
+
+        return interpolated_densities_va
+
+
     def forward(self, points: Tensor, viewdirs: Optional[Tensor] = None) -> Tensor:
         """
         computes the features/radiance at the requested 3D points
@@ -830,7 +887,6 @@ class VoxelArtGrid(Module):
         preactivated_densities = self._density_preactivation(
             self._densities * self._expected_density_scale
         )  # note the use of the expected density scale
-        # ADDITION ES: Changed interpolation mode to nearest here
 
         #----------------------------#
         #         DENSITIES          #

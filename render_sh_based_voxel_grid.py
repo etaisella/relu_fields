@@ -73,7 +73,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @click.option("--quantize_colors", type=click.BOOL, required=False, default=True,
               help="A flag that determines weather to quantize colors and use a palette", \
                 show_default=True)
-@click.option("--palette_learning_mode", type=click.BOOL, required=False, default=True,
+@click.option("--palette_learning_mode", type=click.BOOL, required=False, default=False,
               help="A flag that determines weather learn the palette", \
                 show_default=True)
 
@@ -121,6 +121,8 @@ def main(**kwargs) -> None:
     if not config.palette_learning_mode:
         vol_mod.thre3d_repr._palette = palette  
         vol_mod.num_colors = config.num_colors
+    
+    vol_mod.thre3d_repr.quantize_colors = config.quantize_colors
 
     hemispherical_radius = extra_info[HEMISPHERICAL_RADIUS]
     camera_intrinsics = extra_info[CAMERA_INTRINSICS]
