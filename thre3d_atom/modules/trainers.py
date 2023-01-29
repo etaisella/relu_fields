@@ -115,7 +115,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     tv_weight: float=0.0,
     l1_weight: float=1.0,
     accumulation_iters: int=1,
-    clip_prompt: str="none",
+    prompt: str="none",
     start_semantic_iter=-1,
     sl_weight=1.0,
     directional_weight=0.0,
@@ -182,9 +182,10 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         dir_loss = clipDirectionalLoss(clip_model, device)
 
     # set up score distillation loss
+    print(f"SD prompt: {prompt}")
     if start_sdl_iter != -1:
         sd_loss = scoreDistillationLoss(device,
-                                        "a render of a cute grey dog with a red collar and black eyes in VoxelArt style",
+                                        prompt,
                                         )
 
     # create downsampled versions of the train_dataset for lower training stages
@@ -374,7 +375,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 images, poses = next(infinite_warped_dl)
             else:
                 images, poses = next(infinite_train_dl)
-            #images, poses = next(infinite_train_dl)
             
             wandb.log({"Input Image": wandb.Image(images[0])}, step=global_step)
 
@@ -392,8 +392,9 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # ES: Compute score distillation loss:
             if global_step == start_sdl_iter:
                 calculate_sdl = True
-                diffuse_weight = 0.7
-                specular_weight = 0.7
+                diffuse_weight = 0.07
+                specular_weight = 0.07 
+                specular_weight = 1.0
                 vol_mod.thre3d_repr._densities.requires_grad = False
                 vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
                 optimizeable_parameters = vol_mod.thre3d_repr.parameters()
@@ -484,7 +485,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # ES: Compute Semantic loss:
             if calculate_semantics and semantic_weight != 0.0:
                 semantic_loss = clip_semantic_loss(pva_image, \
-                    pixels_batch, im_h, im_w, clip_model, clip_prompt)
+                    pixels_batch, im_h, im_w, clip_model, prompt)
                 semantic_loss_value = semantic_loss.item()
                 total_loss = total_loss + semantic_weight * semantic_loss
             else:

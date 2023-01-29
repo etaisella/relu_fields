@@ -153,7 +153,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="Weight of the semantic loss (CLiP)", show_default=True)
 @click.option("--accumulation_iters", type=click.INT, required=False, default=1,
               help="iterations before optimization step", show_default=True)
-@click.option("--clip_prompt", type=click.STRING, required=False, default="none",
+@click.option("--prompt", type=click.STRING, required=False, default="none",
               help="prompt used for semantic loss (temporary)", show_default=True)
 @click.option("--start_semantic_iter", type=click.INT, required=False, default=-1,
               help="iteration where we start using semantic loss", show_default=True)
@@ -357,7 +357,7 @@ def main(**kwargs) -> None:
         clip_model=clip_model,
         semantic_weight=config.semantic_weight,
         accumulation_iters=config.accumulation_iters,
-        clip_prompt=config.clip_prompt,
+        prompt=config.prompt,
         start_semantic_iter=config.start_semantic_iter,
         sl_weight=config.sl_weight,
         directional_weight=config.directional_weight,

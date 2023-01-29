@@ -314,7 +314,10 @@ def sa_loss(output: Tensor,
                 continue
 
             #min_diff = torch.min(diffs_for_voxel.flatten())
-            min_diff = torch.quantile(diffs_for_voxel.flatten(), percentile, interpolation='lower')
+            if percentile < 0.0:
+                min_diff = torch.min(diffs_for_voxel.flatten())
+            else:
+                min_diff = torch.quantile(diffs_for_voxel.flatten(), percentile, interpolation='lower')
             min_diff_img[torch.logical_and((id_frame == unique_id).to(device), foreground_mask)] = min_diff
         
         # 4. Add to overall loss:
@@ -827,6 +830,24 @@ class VoxelArtGrid(Module):
         palette_copy = torch.sigmoid(palette_copy * C0)
         palette_copy = torch.unsqueeze(torch.permute(palette_copy, (1, 0)), dim=-2)
         return palette_copy
+
+
+    def finite_difference_normal(self, x, epsilon=1e-2):
+        # x: [N, 3]
+        dx_pos, _ = self.densitiy_only_forward((x + torch.tensor([[epsilon, 0.00, 0.00]], device=x.device)))
+        dx_neg, _ = self.densitiy_only_forward((x + torch.tensor([[-epsilon, 0.00, 0.00]], device=x.device)))
+        dy_pos, _ = self.densitiy_only_forward((x + torch.tensor([[0.00, epsilon, 0.00]], device=x.device)))
+        dy_neg, _ = self.densitiy_only_forward((x + torch.tensor([[0.00, -epsilon, 0.00]], device=x.device)))
+        dz_pos, _ = self.densitiy_only_forward((x + torch.tensor([[0.00, 0.00, epsilon]], device=x.device)))
+        dz_neg, _ = self.densitiy_only_forward((x + torch.tensor([[0.00, 0.00, -epsilon]], device=x.device)))
+        
+        normal = torch.stack([
+            0.5 * (dx_pos - dx_neg) / epsilon, 
+            0.5 * (dy_pos - dy_neg) / epsilon, 
+            0.5 * (dz_pos - dz_neg) / epsilon
+        ], dim=-1)
+
+        return -normal
 
 
     def densitiy_only_forward(self, points: Tensor) -> Tensor:
