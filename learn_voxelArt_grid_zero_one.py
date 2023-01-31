@@ -129,8 +129,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                    "(skips testing and some lengthy visualizations)", show_default=True)
 
 # Etai Additions:
-@click.option("--rtmv", type=click.BOOL, required=False, default=False,
-              help="a flag ES added to change the way we load DATA to use the RTMV dataset", show_default=True)
 @click.option("--temperature_gamma", type=click.FLOAT, required=False, default=1.0,
               help="the gamma by which we increase temperature", show_default=True)
 @click.option("--raise_temperature_iter", type=click.INT, required=False, default=100,
@@ -154,11 +152,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @click.option("--accumulation_iters", type=click.INT, required=False, default=1,
               help="iterations before optimization step", show_default=True)
 @click.option("--prompt", type=click.STRING, required=False, default="none",
-              help="prompt used for semantic loss (temporary)", show_default=True)
+              help="prompt used for semantic loss (CLIP or diffusion)", show_default=True)
 @click.option("--start_semantic_iter", type=click.INT, required=False, default=-1,
               help="iteration where we start using semantic loss", show_default=True)
-@click.option("--sl_weight", type=click.FLOAT, required=False, default=0.0,
-              help="Weight for structural loss", show_default=True)
 @click.option("--convex_hull_extraction", type=click.BOOL, required=False, default=False,
               help="Use fastLayerDecomposition for palette extraction", show_default=True)
 @click.option("--directional_weight", type=click.FLOAT, required=False, default=0.0,
@@ -173,6 +169,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
               help="Weight for minimal distance (only relevant in palette learning mode)", show_default=True)
 @click.option("--start_sdl_iter", type=click.INT, required=False, default=-1,
               help="iteration to start score distillation in", show_default=True)
+@click.option("--va_structure_mode", type=click.BOOL, required=False, default=False,
+              help="A flag that determines weather to allow va to learn structure", \
+                show_default=True)
 
 # fmt: on
 # -------------------------------------------------------------------------------------
@@ -300,6 +299,7 @@ def main(**kwargs) -> None:
         use_pure_argmax=config.use_pure_argmax,
         quantize_colors=config.quantize_colors,
         palette_learning_mode=config.palette_learning_mode,
+        va_structure_mode=config.va_structure_mode,
     )
     # fmt: on
 
@@ -346,7 +346,7 @@ def main(**kwargs) -> None:
         num_workers=config.num_workers,
         verbose_rendering=config.verbose_rendering,
         fast_debug_mode=config.fast_debug_mode,
-        voxel_art_mode=True, # this mode tells it that is a voxelArt grid with no cnn
+        va_no_cnn_mode=True, # this mode tells it that is a voxelArt grid with no cnn
         temperature_gamma=config.temperature_gamma,
         raise_temperature_iter=config.raise_temperature_iter,
         sa_init_weight=config.sa_init_weight,
@@ -359,13 +359,13 @@ def main(**kwargs) -> None:
         accumulation_iters=config.accumulation_iters,
         prompt=config.prompt,
         start_semantic_iter=config.start_semantic_iter,
-        sl_weight=config.sl_weight,
         directional_weight=config.directional_weight,
         palette_learning_mode=config.palette_learning_mode,
         min_distance_weight=config.min_distance_weight,
         warped_dataset=warped_dataset,
         quantize_colors=config.quantize_colors,
         start_sdl_iter=config.start_sdl_iter,
+        va_structure_mode=config.va_structure_mode,
     )
 
 

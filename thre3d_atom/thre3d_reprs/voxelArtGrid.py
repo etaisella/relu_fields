@@ -558,6 +558,7 @@ class VoxelArtGrid(Module):
         temperature: float = 1.0,
         quantize_colors: bool = True,
         palette_learning_mode: bool = False,
+        va_structure_mode: bool = False,
     ):
         """
         Defines a Voxel-Grid denoting a 3D-volume. To obtain features of a particular point inside
@@ -606,6 +607,7 @@ class VoxelArtGrid(Module):
         self._tunable = tunable
         self._palette = palette
         self._palette_learning_mode = palette_learning_mode
+        self.va_structure_mode = va_structure_mode
         self.interpolation_mode = "bilinear"
 
         # VoxelArt specific stuff
@@ -967,8 +969,13 @@ class VoxelArtGrid(Module):
             ..., None
         ]  # note this None is required because of the squeeze operation :sweat_smile:
 
-        interpolated_densities_va = torch.squeeze(interpolated_densities_va).detach()
-        interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
+        
+        if self.va_structure_mode:
+            interpolated_densities_va = torch.squeeze(interpolated_densities_va)
+            interpolated_densities_va = self._softmax_density(interpolated_densities_va)
+        else:
+            interpolated_densities_va = torch.squeeze(interpolated_densities_va).detach()
+            interpolated_densities_va = self._st_pure_argmax(interpolated_densities_va)
         interpolated_densities_va = torch.matmul(interpolated_densities_va, zero_one_tensor)
         interpolated_densities_va = self._density_postactivation(interpolated_densities_va)
         interpolated_densities_va = torch.unsqueeze(interpolated_densities_va, dim=-1)
@@ -1015,7 +1022,10 @@ class VoxelArtGrid(Module):
         interpolated_features_va = self._feature_postactivation(interpolated_features_va)
 
         if self._quantize_colors:
-            interpolated_features_va = self._st_pure_argmax(interpolated_features_va)
+            if self.va_structure_mode:
+                interpolated_features_va = self._softmax_features(interpolated_features_va)
+            else:
+                interpolated_features_va = self._st_pure_argmax(interpolated_features_va)
             interpolated_features_va = torch.matmul(interpolated_features_va, self._palette)
 
         if self._palette_learning_mode:
@@ -1127,6 +1137,7 @@ def scale_zero_one_voxel_grid_with_required_output_size(
         quantize_colors=voxel_grid._quantize_colors,
         palette_learning_mode=voxel_grid._palette_learning_mode,
         **voxel_grid.get_config_dict(),
+        va_structure_mode=voxel_grid.va_structure_mode,
     )
 
     # noinspection PyProtectedMember

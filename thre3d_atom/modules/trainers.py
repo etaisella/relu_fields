@@ -99,7 +99,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     verbose_rendering: bool = True,
     fast_debug_mode: bool = False,
     voxel_art_3dcnn_mode: bool = False,
-    voxel_art_mode: bool = False,
+    va_no_cnn_mode: bool = False,
     temperature_gamma: float=1.15,
     raise_temperature_iter: int=200,
     zero_one_density_iter: int=-1,
@@ -112,18 +112,17 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     sa_percentile: float=0.1,
     clip_model = None,
     semantic_weight: float=0.0,
-    tv_weight: float=0.0,
     l1_weight: float=1.0,
     accumulation_iters: int=1,
     prompt: str="none",
     start_semantic_iter=-1,
-    sl_weight=1.0,
     directional_weight=0.0,
     palette_learning_mode=False,
     min_distance_weight=0.0,
     warped_dataset=None,
     quantize_colors=True,
     start_sdl_iter=-1,
+    va_structure_mode=False,
 ) -> VolumetricModel:
     """
     ------------------------------------------------------------------------------------------------------
@@ -160,9 +159,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
     """
     calculate_semantics = False
     calculate_sdl = False
-    calculate_total_variation = False
     calculate_shift_aware = False
-    calculate_structure_loss = False
     best_total_loss = INIT_TOTAL_LOSS
     sa_weight = sa_init_weight
     specular_weight = l1_weight
@@ -182,8 +179,8 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         dir_loss = clipDirectionalLoss(clip_model, device)
 
     # set up score distillation loss
-    print(f"SD prompt: {prompt}")
     if start_sdl_iter != -1:
+        print(f"SD prompt: {prompt}")
         sd_loss = scoreDistillationLoss(device,
                                         prompt,
                                         )
@@ -209,7 +206,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
         with torch.no_grad():
             # TODO: Possibly create a nice interface for reprs as a resolution of the below warning
             # noinspection PyTypeChecker
-            if voxel_art_mode:
+            if va_no_cnn_mode:
                 vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
                     vol_mod.thre3d_repr,
                     output_size=stagewise_voxel_grid_sizes[0],
@@ -381,27 +378,28 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # ES: Compute Shift-Aware loss:
             if global_step == sa_start_iter:
                 calculate_shift_aware = True
-                vol_mod.thre3d_repr._densities.requires_grad = False
-                #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
-                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
-                optimizer = torch.optim.Adam(
-                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
-                    betas=(0.9, 0.999),
-                )
+                if not va_structure_mode:
+                    vol_mod.thre3d_repr._densities.requires_grad = False
+                    #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
+                    optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                    optimizer = torch.optim.Adam(
+                        params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                        betas=(0.9, 0.999),
+                    )
 
             # ES: Compute score distillation loss:
             if global_step == start_sdl_iter:
                 calculate_sdl = True
-                diffuse_weight = 0.07
-                specular_weight = 0.07 
-                specular_weight = 1.0
-                vol_mod.thre3d_repr._densities.requires_grad = False
-                #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
-                optimizeable_parameters = vol_mod.thre3d_repr.parameters()
-                optimizer = torch.optim.Adam(
-                    params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
-                    betas=(0.9, 0.999),
-                )
+                diffuse_weight = 0.007
+                specular_weight = 0.007 
+                if not va_structure_mode:
+                    vol_mod.thre3d_repr._densities.requires_grad = False
+                    #vol_mod.thre3d_repr._features = torch.nn.Parameter(vol_mod.thre3d_repr._features * 0.0)
+                    optimizeable_parameters = vol_mod.thre3d_repr.parameters()
+                    optimizer = torch.optim.Adam(
+                        params=[{"params": optimizeable_parameters, "lr": current_stage_lr}],
+                        betas=(0.9, 0.999),
+                    )
             
             # ES: Compute Shift-Aware loss:
             if global_step == start_semantic_iter:
@@ -456,14 +454,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
 
             # ES: Compute SDL:
             if calculate_sdl:
-                sd_loss.training_step(pva_image, im_h, im_w)
-
-            if calculate_structure_loss:
-                structure_loss = sparsity_loss(vol_mod.thre3d_repr._features)
-                structural_loss_value = structure_loss.item()
-                total_loss = total_loss + structure_loss * sl_weight
-            else:
-                structural_loss_value = 0.0
+                sd_loss.training_step(specular_rendered_batch_va.colour, im_h, im_w)
 
             if calculate_shift_aware:
                 shift_aware_loss = sa_loss(pva_image, 
@@ -499,15 +490,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                 total_loss = total_loss + directional_weight * directional_loss
             else:
                 directional_loss_value = 0.0
-
-            # ES: Compute TV:
-            if calculate_total_variation:
-                tv_loss = total_variation_loss(specular_rendered_batch_va.colour, \
-                    im_h, im_w, render_dir, global_step)
-                tv_loss_value = tv_loss.item()
-                total_loss = total_loss + tv_weight * tv_loss
-            else:
-                tv_loss_value = 0
+                
 
             # compute loss and perform gradient update
             # Main, specular loss
@@ -558,9 +541,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             wandb.log({"diffuse weight" : diffuse_weight}, step=global_step)
             wandb.log({"semantic loss" : semantic_loss_value}, step=global_step)
             wandb.log({"semantic weight" : semantic_weight}, step=global_step)
-            wandb.log({"TV loss" : tv_loss_value}, step=global_step)
-            wandb.log({"TV weight" : tv_weight}, step=global_step)
-            wandb.log({"structural loss" : structural_loss_value}, step=global_step)
             wandb.log({"directional loss" : directional_loss_value}, step=global_step)
 
 
@@ -616,7 +596,6 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
                     f"specular_loss: {specular_loss_value: .3f} "
                     f"specular_psnr: {specular_psnr_value: .3f} "
                     f"SA Loss: {shift_aware_loss_value: .3f} "
-                    f"SL Loss: {structural_loss_value: .3f} "
                     f"Semantic Loss: {semantic_loss_value: .3f} "
                     f"Directional Loss: {directional_loss_value: .3f} "
                 )
@@ -727,7 +706,7 @@ def train_sh_vox_grid_vol_mod_with_posed_images(
             # upsample the feature-grid after the completion of the stage:
             with torch.no_grad():
                 # noinspection PyTypeChecker
-                if voxel_art_mode:
+                if va_no_cnn_mode:
                     vol_mod.thre3d_repr = scale_zero_one_voxel_grid_with_required_output_size(
                         vol_mod.thre3d_repr,
                         output_size=stagewise_voxel_grid_sizes[stage],
